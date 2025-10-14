@@ -12,12 +12,12 @@ make clean
 rm -rf $SCRATCH/sorting_project_data
 
 echo "==> Step 1 of 2: Compiling C++ code and running experiments..."
-python run_experiments.py
+python3 run_experiments.py
 
 echo "==> Experiments finished successfully. Results are in results.json."
 
 echo "==> Step 2 of 2: Building report and generating plots..."
-python build_report.py
+python3 build_report.py
 
 echo "==> Report plots created in the 'report/' directory."
 echo "--- Workflow Complete! ---"

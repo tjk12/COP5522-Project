@@ -7,7 +7,7 @@
 #include <cmath>
 #include <numeric>
 #include <omp.h>
-#include "json.hpp" // Assuming json.hpp is in an 'include' directory
+#include "json.hpp"
 
 using json = nlohmann::json;
 
@@ -18,7 +18,7 @@ std::vector<unsigned int> read_data(const std::string& filename) {
         std::cerr << "Error opening file: " << filename << std::endl;
         exit(1);
     }
-    const int RECORD_SIZE = 100; // Each record is 100 bytes
+    const int RECORD_SIZE = 100;
     file.seekg(0, std::ios::end);
     long long file_size = file.tellg();
     file.seekg(0, std::ios::beg);
@@ -31,7 +31,6 @@ std::vector<unsigned int> read_data(const std::string& filename) {
             std::cerr << "Error reading record " << i << " from file." << std::endl;
             exit(1);
         }
-        // Extract the 4-byte key (assuming it's at the beginning of the 100-byte record)
         data.push_back(*reinterpret_cast<unsigned int*>(buffer));
     }
     return data;
@@ -46,36 +45,32 @@ bool is_sorted(const std::vector<unsigned int>& data) {
     return true;
 }
 
-// --- Scalable Hybrid Sort/Merge ---
+// --- CORRECTED: Simplified Hybrid Sort/Merge ---
 // A parallel sort that divides data into chunks, sorts them locally, then merges them in parallel.
 void hybrid_sort_merge(std::vector<unsigned int>& data) {
     int n = data.size();
     if (n == 0) return;
 
-    // Use a temporary buffer for merging, swapping source and destination
     std::vector<unsigned int> temp_buffer(n);
-    bool in_data = true; // Flag to track if the current sorted state is in 'data' or 'temp_buffer'
+    bool in_data = true;
 
     #pragma omp parallel
     {
         int num_threads = omp_get_num_threads();
         int thread_id = omp_get_thread_num();
         
-        // Ensure that block_size is at least 1, even for small N
         int block_size = (n + num_threads - 1) / num_threads;
         int start = thread_id * block_size;
         int end = std::min(start + block_size, n);
 
-        // Phase 1: Each thread sorts its local chunk using std::sort (e.g., IntroSort)
+        // Phase 1: Each thread sorts its local chunk
         if (start < end) {
             std::sort(data.begin() + start, data.begin() + end);
         }
-        #pragma omp barrier // Ensure all chunks are sorted before merging starts
+        #pragma omp barrier
     }
 
     // Phase 2: Iterative parallel merge
-    // Repeatedly merge adjacent sorted blocks.
-    // merge_size goes from 1, 2, 4, 8, ... up to n/2
     for (int merge_size = 1; merge_size < n; merge_size *= 2) {
         std::vector<unsigned int>& src = in_data ? data : temp_buffer;
         std::vector<unsigned int>& dst = in_data ? temp_buffer : data;
@@ -87,113 +82,82 @@ void hybrid_sort_merge(std::vector<unsigned int>& data) {
             int start2 = end1;
             int end2 = std::min(start2 + merge_size, n);
             
-            // Only merge if there's a second block or first block is not fully merged
-            if (start2 < end2 || start1 < end1) {
-                std::merge(src.begin() + start1, src.begin() + end1,
-                           src.begin() + start2, src.begin() + end2,
-                           dst.begin() + start1);
-            } else {
-                // If only one block remains (e.g., at the very end of the array)
-                // or if it's an empty merge, copy directly.
-                // This handles cases where a block_size covers past 'n' or single element blocks.
-                for (int k = start1; k < end1; ++k) {
-                    dst[k] = src[k];
-                }
-            }
+            // std::merge handles empty ranges correctly
+            std::merge(src.begin() + start1, src.begin() + end1,
+                       src.begin() + start2, src.begin() + end2,
+                       dst.begin() + start1);
         }
-        in_data = !in_data; // Toggle source/destination for the next merge pass
+        in_data = !in_data;
     }
 
-    // If the final sorted data resides in the temp_buffer, copy it back to original 'data'
+    // Copy final result back to data if needed
     if (!in_data) {
         #pragma omp parallel for
-        for(int i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++i) {
             data[i] = temp_buffer[i];
         }
     }
 }
 
-
-// --- Scalable Parallel Radix Sort ---
-// Implements a Counting Sort pass for one byte, using parallel prefix sum for efficient placement.
+// --- CORRECTED: Efficient Parallel Radix Sort ---
+// Uses a 2D histogram approach with prefix sums for O(t^2) offset calculation
 void scalable_radix_sort_pass(std::vector<unsigned int>& data, int byte_num) {
     int n = data.size();
     if (n == 0) return;
 
-    std::vector<unsigned int> temp_buffer(n); // Buffer for sorted output of this pass
-    int shift = byte_num * 8; // Bit shift to extract the relevant byte
-    const int BUCKET_SIZE = 256; // 2^8 for a byte
+    std::vector<unsigned int> temp_buffer(n);
+    int shift = byte_num * 8;
+    const int BUCKET_SIZE = 256;
 
-    // Global counts array, shared across threads. Needs atomic updates or reduction.
-    std::vector<int> global_counts(BUCKET_SIZE, 0); 
+    int num_threads = omp_get_max_threads();
     
+    // 2D histogram: thread_histograms[thread_id][bucket]
+    std::vector<std::vector<int>> thread_histograms(num_threads, std::vector<int>(BUCKET_SIZE, 0));
+    
+    // Step 1: Each thread builds its private histogram
     #pragma omp parallel
     {
-        int num_threads = omp_get_num_threads();
         int thread_id = omp_get_thread_num();
-
-        // Step 1: Each thread builds a private histogram for its data chunk
-        std::vector<int> local_counts(BUCKET_SIZE, 0);
         int chunk_size = (n + num_threads - 1) / num_threads;
         int start_idx = thread_id * chunk_size;
         int end_idx = std::min(start_idx + chunk_size, n);
 
         for (int i = start_idx; i < end_idx; ++i) {
-            local_counts[(data[i] >> shift) & 0xFF]++;
-        }
-
-        // Step 2: Aggregate local counts into global_counts (critical section or atomic)
-        #pragma omp critical
-        {
-            for (int i = 0; i < BUCKET_SIZE; ++i) {
-                global_counts[i] += local_counts[i];
-            }
-        }
-        #pragma omp barrier // Ensure all threads have updated global_counts
-
-        // Step 3: Compute thread-private starting offsets for each bucket (exclusive scan for local elements)
-        // This is the core of parallel placement without contention.
-        // Each thread computes its contribution to the global offsets.
-        std::vector<int> thread_start_offsets(BUCKET_SIZE); // Where THIS thread should start placing elements for each bucket
-        
-        #pragma omp single
-        {
-            // First, convert global_counts to an exclusive prefix sum to get final bucket start positions
-            // This is done once by one thread
-            int current_sum = 0;
-            for (int i = 0; i < BUCKET_SIZE; ++i) {
-                int count_for_bucket = global_counts[i];
-                global_counts[i] = current_sum; // global_counts now stores global exclusive prefix sum
-                current_sum += count_for_bucket;
-            }
-        }
-        #pragma omp barrier // Ensure global_counts is a global exclusive prefix sum before threads proceed
-
-        // Now, each thread figures out its specific starting point for placing elements
-        // within each bucket, relative to the global starting point of that bucket.
-        // This is done by performing a local prefix sum of previous threads' elements.
-        for (int i = 0; i < BUCKET_SIZE; ++i) {
-            thread_start_offsets[i] = global_counts[i];
-            // Accumulate counts from previous threads for this bucket
-            for (int t = 0; t < thread_id; ++t) {
-                int prev_thread_start_idx = t * chunk_size;
-                int prev_thread_end_idx = std::min(prev_thread_start_idx + chunk_size, n);
-                for (int k = prev_thread_start_idx; k < prev_thread_end_idx; ++k) {
-                    if (((data[k] >> shift) & 0xFF) == i) {
-                        thread_start_offsets[i]++;
-                    }
-                }
-            }
-        }
-
-        // Step 4: Each thread places its elements into the temporary buffer in parallel
-        for (int i = start_idx; i < end_idx; ++i) {
             int bucket = (data[i] >> shift) & 0xFF;
-            temp_buffer[thread_start_offsets[bucket]++] = data[i];
+            thread_histograms[thread_id][bucket]++;
         }
     }
 
-    // Copy the sorted data back from the temporary buffer to the original array
+    // Step 2: Compute prefix sums to determine placement offsets
+    // offset[thread_id][bucket] = where thread_id should start placing elements in bucket
+    std::vector<std::vector<int>> offsets(num_threads, std::vector<int>(BUCKET_SIZE, 0));
+    
+    for (int bucket = 0; bucket < BUCKET_SIZE; ++bucket) {
+        int current_offset = 0;
+        for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
+            offsets[thread_id][bucket] = current_offset;
+            current_offset += thread_histograms[thread_id][bucket];
+        }
+    }
+
+    // Step 3: Each thread places its elements using precomputed offsets
+    #pragma omp parallel
+    {
+        int thread_id = omp_get_thread_num();
+        int chunk_size = (n + num_threads - 1) / num_threads;
+        int start_idx = thread_id * chunk_size;
+        int end_idx = std::min(start_idx + chunk_size, n);
+
+        // Create thread-local counters for placement within each bucket
+        std::vector<int> local_offsets = offsets[thread_id];
+
+        for (int i = start_idx; i < end_idx; ++i) {
+            int bucket = (data[i] >> shift) & 0xFF;
+            temp_buffer[local_offsets[bucket]++] = data[i];
+        }
+    }
+
+    // Step 4: Copy sorted data back to original array
     #pragma omp parallel for
     for (int i = 0; i < n; ++i) {
         data[i] = temp_buffer[i];
@@ -201,7 +165,7 @@ void scalable_radix_sort_pass(std::vector<unsigned int>& data, int byte_num) {
 }
 
 void scalable_radix_sort(std::vector<unsigned int>& data) {
-    for (int i = 0; i < 4; ++i) { // 32-bit integers have 4 bytes
+    for (int i = 0; i < 4; ++i) {
         scalable_radix_sort_pass(data, i);
     }
 }
@@ -216,7 +180,7 @@ int main(int argc, char* argv[]) {
     int threads = std::stoi(argv[2]);
     std::string filename = argv[3];
     
-    omp_set_num_threads(threads); // Set the number of OpenMP threads
+    omp_set_num_threads(threads);
 
     auto data = read_data(filename);
     size_t N = data.size();
@@ -235,11 +199,11 @@ int main(int argc, char* argv[]) {
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration_ms = end - start;
 
-    bool sorted_correctly = is_sorted(data); // Verify correctness
+    bool sorted_correctly = is_sorted(data);
     
     double duration_s = duration_ms.count() / 1000.0;
-    // Calculate throughput in Mega-Keys per second
-    double mkeys_per_second = (duration_s > 0) ? (static_cast<double>(N) / duration_s) / 1e6 : 0;
+    // Throughput: (N in millions) / (time in seconds) = M-keys/second
+    double mkeys_per_second = (duration_s > 0) ? (N / 1e6 / duration_s) : 0;
 
     json result = {
         {"algorithm", algorithm},
@@ -249,7 +213,7 @@ int main(int argc, char* argv[]) {
         {"mkeys_per_s", mkeys_per_second},
         {"correct", sorted_correctly}
     };
-    std::cout << result.dump() << std::endl; // Output results as JSON
+    std::cout << result.dump() << std::endl;
     
     return 0;
 }
