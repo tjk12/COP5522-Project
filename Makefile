@@ -1,20 +1,15 @@
 # Compiler
-CXX = g++-15
-
+CXX = g++
 # Compiler flags: C++17 standard, Level 3 optimization, and OpenMP support
 CXXFLAGS = -std=c++17 -O3 -fopenmp -march=native
-
 # Include directories for third-party libraries (like json.hpp)
 INCLUDES = -Iinclude
-
 # The final executable name
 TARGET = sorter
-
 # The source file
 SOURCES = main.cpp
 
 # --- Rules ---
-
 # Default rule: build the target executable
 all: $(TARGET)
 
@@ -25,3 +20,5 @@ $(TARGET): $(SOURCES)
 # Rule to clean up generated files
 clean:
 	rm -f $(TARGET)
+	rm -f results.json
+	rm -rf report
