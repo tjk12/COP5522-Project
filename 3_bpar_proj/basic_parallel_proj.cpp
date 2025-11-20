@@ -225,10 +225,11 @@ int main(int argc, char* argv[]) {
     
     double duration_s = duration_ms.count() / 1000.0;
     double mkeys_per_second = (duration_s > 0) ? (N / 1e6 / duration_s) : 0;
-    
+
     int num_threads = omp_get_max_threads();
 
     json result = {
+        {"Title", "Basic Parallel Sorter"},
         {"algorithm", algorithm},
         {"N", N},
         {"threads", num_threads},

@@ -129,6 +129,7 @@ int main(int argc, char* argv[]) {
     double mkeys_per_second = (duration_s > 0) ? (N / 1e6 / duration_s) : 0;
 
     json result = {
+        {"Title", "Basic Sequential Sorter"},
         {"algorithm", algorithm},
         {"N", N},
         {"threads", 1}, // Always 1 for sequential implementation

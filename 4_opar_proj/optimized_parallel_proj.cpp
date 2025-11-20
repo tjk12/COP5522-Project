@@ -360,6 +360,7 @@ int main(int argc, char* argv[]) {
         double mkeys_per_second = (duration_s > 0) ? (N / 1e6 / duration_s) : 0;
 
         json result = {
+            {"Title", "Optimized Parallel Sorter"},
             {"algorithm", algorithm},
             {"N", N},
             {"mpi_procs", world_size},
