@@ -62,17 +62,20 @@ void sort_merge(std::vector<unsigned int>& data) {
         }
     }
 
-    // Each thread sorts its local chunk
+    // Each thread sorts its local chunk (implicit barrier at end)
     #pragma omp parallel for schedule(static, 1)
     for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
-        std::sort(data.begin() + displs[thread_id], 
-                 data.begin() + displs[thread_id] + sendcounts[thread_id]);
+        std::sort(data.begin() + displs[thread_id],
+                  data.begin() + displs[thread_id] + sendcounts[thread_id]);
     }
 
-    // Sequential merge at the end (tree-based merge could be parallelized further)
-    #pragma omp barrier
-    
+    // Tree-based merging: perform pairwise merges in parallel, but
+    // update shared metadata (sendcounts/displs) only after the
+    // parallel phase to avoid race conditions that corrupt memory.
     for (int step = 1; step < num_threads; step *= 2) {
+        // Prepare a vector to capture merged sizes for this step.
+        std::vector<int> merged_sizes = sendcounts; // start with current sizes
+
         #pragma omp parallel for schedule(static, 1)
         for (int thread_id = 0; thread_id < num_threads; thread_id += 2 * step) {
             if (thread_id + step < num_threads) {
@@ -80,22 +83,30 @@ void sort_merge(std::vector<unsigned int>& data) {
                 int left_end = displs[thread_id] + sendcounts[thread_id];
                 int right_start = displs[thread_id + step];
                 int right_end = displs[thread_id + step] + sendcounts[thread_id + step];
-                
-                std::vector<unsigned int> merged(left_end - left_start + right_end - right_start);
+
+                int left_len = left_end - left_start;
+                int right_len = right_end - right_start;
+                std::vector<unsigned int> merged(left_len + right_len);
                 std::merge(data.begin() + left_start, data.begin() + left_end,
-                          data.begin() + right_start, data.begin() + right_end,
-                          merged.begin());
-                
+                           data.begin() + right_start, data.begin() + right_end,
+                           merged.begin());
+
+                // Write merged results back into the main array
                 std::copy(merged.begin(), merged.end(), data.begin() + left_start);
-                
-                // Update sendcounts for merged region
-                sendcounts[thread_id] = merged.size();
-                for (int i = thread_id + 1; i < num_threads; ++i) {
-                    displs[i] = displs[i - 1] + sendcounts[i - 1];
-                }
+
+                // Record new size for this merged region (thread-local index)
+                merged_sizes[thread_id] = left_len + right_len;
+                // Mark the right-hand chunk as consumed
+                merged_sizes[thread_id + step] = 0;
             }
         }
-        #pragma omp barrier
+
+        // Single-threaded update of sendcounts and displs to avoid races
+        for (int i = 0; i < num_threads; ++i) {
+            sendcounts[i] = merged_sizes[i];
+            if (i == 0) displs[i] = 0;
+            else displs[i] = displs[i - 1] + sendcounts[i - 1];
+        }
     }
 }
 
