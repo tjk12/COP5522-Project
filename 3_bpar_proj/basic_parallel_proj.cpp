@@ -46,7 +46,7 @@ bool is_sorted(const std::vector<unsigned int>& data) {
 }
 
 // --- Basic OpenMP Merge Sort ---
-void hybrid_sort_merge(std::vector<unsigned int>& data) {
+void sort_merge(std::vector<unsigned int>& data) {
     int num_threads = omp_get_max_threads();
     int n_global = data.size();
     
@@ -100,7 +100,7 @@ void hybrid_sort_merge(std::vector<unsigned int>& data) {
 }
 
 // --- Basic OpenMP Radix Sort ---
-void scalable_radix_sort(std::vector<unsigned int>& data) {
+void radix_sort(std::vector<unsigned int>& data) {
     int num_threads = omp_get_max_threads();
     int n_global = data.size();
 
@@ -186,6 +186,7 @@ int main(int argc, char* argv[]) {
     if (argc < 3) {
         std::cerr << "Usage: " << argv[0] << " <algorithm> <filename>" << std::endl;
         std::cerr << "Note: Number of threads is determined by OMP_NUM_THREADS." << std::endl;
+        std::cerr << "Algorithms: merge_sort, radix_sort" << std::endl;
         return 1;
     }
     std::string algorithm = argv[1];
@@ -196,12 +197,13 @@ int main(int argc, char* argv[]) {
 
     auto start = std::chrono::high_resolution_clock::now();
     
-    if (algorithm == "hybrid_merge_sort") {
-        hybrid_sort_merge(data);
-    } else if (algorithm == "scalable_radix_sort") {
-        scalable_radix_sort(data);
+    if (algorithm == "merge_sort") {
+        sort_merge(data);
+    } else if (algorithm == "radix_sort") {
+        radix_sort(data);
     } else {
         std::cerr << "Unknown algorithm: " << algorithm << std::endl;
+        std::cerr << "Algorithms: merge_sort, radix_sort" << std::endl;
         return 1;
     }
     

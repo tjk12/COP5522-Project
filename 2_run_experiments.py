@@ -40,10 +40,10 @@ EXPERIMENTS = {
     "sequential": {
         "enabled": True,
         "executables": {
-            "basic_seq_sorter": ["basic_merge_sort", "basic_radix_sort"],
+            "basic_seq_sorter": ["merge_sort", "radix_sort"],
             "optimized_seq_sorter": [
-                "optimized_merge_sort",
-                "optimized_radix_sort"
+                "merge_sort",
+                "radix_sort"
             ],
         },
         "threads": [1],
@@ -52,8 +52,8 @@ EXPERIMENTS = {
         "enabled": True,
         "executables": {
             "basic_omp_sorter": [
-                "hybrid_merge_sort",
-                "scalable_radix_sort"
+                "merge_sort",
+                "radix_sort"
             ],
         },
         "threads": [1, 2, 4, 8]
@@ -62,16 +62,14 @@ EXPERIMENTS = {
         "enabled": True,
         "executables": {
             "optimized_mpi_sorter": [
-                "hybrid_merge_sort",
-                "scalable_radix_sort"
+                "merge_sort",
+                "radix_sort"
             ],
         },
         "processes": [1, 2, 3, 4, 5],
         "threads_per_process": [1, 2, 4, 8]
     }
 }
-
-
 
 
 def exe_fullpath(exe_name):
@@ -169,8 +167,6 @@ def build_missing_executables():
                 print(f"✗ Error building {exe_name}: {e}")
 
 
-
-
 def run_and_collect(cmd, results_list, env=None):
     """
     Executes a command, parses JSON output, appends to results_list.
@@ -212,7 +208,7 @@ def run_and_collect(cmd, results_list, env=None):
                   f"Correct: {result_json.get('correct')}")
 
     except subprocess.CalledProcessError as e:
-        print(f"    ERROR running command: {' '.join(cmd)}")
+        print(f"ERROR running command: {' '.join(cmd)}")
         try:
             stderr = e.stderr
         except Exception:

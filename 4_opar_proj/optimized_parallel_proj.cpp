@@ -49,7 +49,7 @@ bool is_sorted(const std::vector<unsigned int>& data) {
 }
 
 // --- Optimized Hybrid MPI+OpenMP Merge Sort ---
-void hybrid_sort_merge(std::vector<unsigned int>& data, int rank, int world_size) {
+void merge_sort(std::vector<unsigned int>& data, int rank, int world_size) {
     // Ensure data is only non-empty on rank 0
     if (rank != 0) {
         data.clear();
@@ -150,7 +150,7 @@ void hybrid_sort_merge(std::vector<unsigned int>& data, int rank, int world_size
 }
 
 // --- Optimized Hybrid MPI+OpenMP Radix Sort ---
-void scalable_radix_sort_pass(std::vector<unsigned int>& local_data, int byte_num, int rank, int world_size) {
+void radix_sort_pass(std::vector<unsigned int>& local_data, int byte_num, int rank, int world_size) {
     int n_local = local_data.size();
     if (n_local == 0 && world_size == 1) return;
 
@@ -256,7 +256,7 @@ void scalable_radix_sort_pass(std::vector<unsigned int>& local_data, int byte_nu
     }
 }
 
-void scalable_radix_sort(std::vector<unsigned int>& data, int rank, int world_size) {
+void radix_sort(std::vector<unsigned int>& data, int rank, int world_size) {
     // Ensure data is only non-empty on rank 0
     if (rank != 0) {
         data.clear();
@@ -284,7 +284,7 @@ void scalable_radix_sort(std::vector<unsigned int>& data, int rank, int world_si
                  local_data.data(), sendcounts[rank], MPI_UNSIGNED, 0, MPI_COMM_WORLD);
 
     for (int i = 0; i < 4; ++i) {
-        scalable_radix_sort_pass(local_data, i, rank, world_size);
+        radix_sort_pass(local_data, i, rank, world_size);
     }
 
     // Gather all sorted parts to the root process
@@ -321,6 +321,7 @@ int main(int argc, char* argv[]) {
     if (argc < 4) {
         if (rank == 0) {
             std::cerr << "Usage: " << argv[0] << " <algorithm> <threads_per_process> <filename>" << std::endl;
+            std::cerr << "Algorithms: merge_sort, radix_sort" << std::endl;
         }
         MPI_Finalize();
         return 1;
@@ -337,10 +338,10 @@ int main(int argc, char* argv[]) {
     MPI_Barrier(MPI_COMM_WORLD);
     auto start = std::chrono::high_resolution_clock::now();
     
-    if (algorithm == "hybrid_merge_sort") {
-        hybrid_sort_merge(data, rank, world_size);
-    } else if (algorithm == "scalable_radix_sort") {
-        scalable_radix_sort(data, rank, world_size);
+    if (algorithm == "merge_sort") {
+        merge_sort(data, rank, world_size);
+    } else if (algorithm == "radix_sort") {
+        radix_sort(data, rank, world_size);
     } else {
         if (rank == 0) {
             std::cerr << "Unknown algorithm: " << algorithm << std::endl;

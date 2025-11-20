@@ -46,7 +46,7 @@ bool is_sorted(const std::vector<unsigned int>& data) {
 }
 
 // --- Optimized Sequential Merge Sort (Iterative with Ping-Pong Buffer) ---
-void optimized_merge_sort(std::vector<unsigned int>& data) {
+void merge_sort(std::vector<unsigned int>& data) {
     int n = data.size();
     if (n <= 1) return;
 
@@ -81,7 +81,7 @@ void optimized_merge_sort(std::vector<unsigned int>& data) {
 }
 
 // --- Optimized Sequential Radix Sort (Histogram-based) ---
-void optimized_radix_sort_pass(std::vector<unsigned int>& data, int byte_num) {
+void radix_sort_pass(std::vector<unsigned int>& data, int byte_num) {
     int n = data.size();
     if (n == 0) return;
 
@@ -114,9 +114,9 @@ void optimized_radix_sort_pass(std::vector<unsigned int>& data, int byte_num) {
     }
 }
 
-void optimized_radix_sort(std::vector<unsigned int>& data) {
+void radix_sort(std::vector<unsigned int>& data) {
     for (int i = 0; i < 4; ++i) { // 4 passes for 32-bit integers
-        optimized_radix_sort_pass(data, i);
+        radix_sort_pass(data, i);
     }
 }
 
@@ -124,7 +124,7 @@ void optimized_radix_sort(std::vector<unsigned int>& data) {
 int main(int argc, char* argv[]) {
     if (argc < 3) {
         std::cerr << "Usage: " << argv[0] << " <algorithm> <filename>" << std::endl;
-        std::cerr << "Algorithms: optimized_merge_sort, optimized_radix_sort" << std::endl;
+        std::cerr << "Algorithms: merge_sort, radix_sort" << std::endl;
         return 1;
     }
     std::string algorithm = argv[1];
@@ -135,10 +135,10 @@ int main(int argc, char* argv[]) {
 
     auto start = std::chrono::high_resolution_clock::now();
     
-    if (algorithm == "optimized_merge_sort") {
-        optimized_merge_sort(data);
-    } else if (algorithm == "optimized_radix_sort") {
-        optimized_radix_sort(data);
+    if (algorithm == "merge_sort") {
+        merge_sort(data);
+    } else if (algorithm == "radix_sort") {
+        radix_sort(data);
     } else {
         std::cerr << "Unknown algorithm: " << algorithm << std::endl;
         return 1;
