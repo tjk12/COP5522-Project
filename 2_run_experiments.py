@@ -3,8 +3,20 @@
 Experiment runner for parallel sorting benchmarks.
 Assumes test data has been generated separately using generate_data.py.
 Executables are located in subdirectories (1_bseq_proj, 2_oseq_proj, etc.)
-"""
 
+Sample manual commands (Linux) to run each sorter executable from their
+subdirectories. These are useful for quick manual testing.
+1) Basic sequential sorter (always single-threaded):
+   ./basic_seq_sorter merge_sort ../sorting_project_data/data_50000000.bin
+2) Optimized sequential sorter (single-threaded optimized):
+   ./optimized_seq_sorter merge_sort ../sorting_project_data/data_50000000.bin
+3) Basic OpenMP parallel sorter (set OMP_NUM_THREADS as needed):
+   export OMP_NUM_THREADS=8
+   ./basic_omp_sorter merge_sort ../sorting_project_data/data_50000000.bin
+4) Optimized MPI+OpenMP hybrid sorter (use mpirun/mpiexec):
+   # Example: 4 MPI processes, 2 threads per process
+   mpirun -np 4 ./optimized_mpi_sorter merge_sort 2 ../sorting_project_data/data_50000000.bin
+"""
 import os
 import subprocess
 import json
