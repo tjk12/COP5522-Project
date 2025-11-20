@@ -100,8 +100,9 @@ def main():
     plt.tight_layout(rect=[0, 0, 1, 0.98])
     plt.savefig(REPORT_DIR / "throughput.png", dpi=300)
     plt.close()
-    
+
     print(f"\n--- Report plots saved in '{REPORT_DIR}' directory ---")
+
 
 if __name__ == "__main__":
     main()

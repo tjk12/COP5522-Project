@@ -4,12 +4,8 @@ set -e
 
 echo "--- Starting the Full Project Workflow ---"
 
-# Clean up previous runs to ensure fresh data and build
 echo "==> Cleaning up previous build and data files..."
 make clean
-# Explicitly remove generated data to ensure gensort re-runs for a clean slate
-# The Python script will re-create this if it doesn't exist.
-rm -rf $SCRATCH/sorting_project_data
 
 echo "==> Step 1 of 2: Compiling C++ code and running experiments..."
 python3 run_experiments.py
