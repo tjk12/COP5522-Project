@@ -2,18 +2,41 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
-echo "--- Starting the Full Project Workflow ---"
+echo "=========================================="
+echo "   Full Project Workflow"
+echo "=========================================="
 
-echo "==> Cleaning up previous build and data files..."
-make clean
+# Step 1: Generate data if not present
+echo ""
+echo "==> Step 1 of 3: Generating test data (if needed)..."
+python3 1_generate_data.py
 
-echo "==> Step 1 of 2: Compiling C++ code and running experiments..."
-python3 run_experiments.py
+echo "    ✓ Test data ready"
 
-echo "==> Experiments finished successfully. Results are in results.json."
+# Step 2: Run experiments
+echo ""
+echo "==> Step 2 of 3: Running experiments..."
+python3 2_run_experiments.py
 
-echo "==> Step 2 of 2: Building report and generating plots..."
-python3 build_report.py
+echo "    ✓ Experiments finished successfully"
+echo "    Results saved to: results.json"
 
-echo "==> Report plots created in the 'report/' directory."
-echo "--- Workflow Complete! ---"
+# Step 3: Build report and generate plots
+echo ""
+echo "==> Step 3 of 3: Building report and generating plots..."
+python3 3_build_report.py
+
+echo "    ✓ Report plots created"
+echo "    Report directory: report/"
+
+echo ""
+echo "=========================================="
+echo "   Workflow Complete!"
+echo "=========================================="
+echo ""
+echo "Next steps:"
+echo "  - Review results.json for raw experiment data"
+echo "  - Check report/ directory for visualization plots:"
+echo "    • scalability.png - Runtime vs. Threads"
+echo "    • speedup.png - Parallel Speedup"
+echo "    • throughput.png - Algorithm Throughput"
