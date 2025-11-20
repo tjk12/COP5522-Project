@@ -24,6 +24,7 @@ import shutil
 from pathlib import Path
 import platform
 import sys
+import argparse
 
 # --- Configuration ---
 system = platform.system()
@@ -36,7 +37,40 @@ RESULTS_FILE = Path("results.json")
 PROJECT_ROOT = Path.cwd()
 
 # Experiment Definitions
-DATA_SIZES = [50 * 10**6]
+# Default data sizes (records)
+DEFAULT_SIZES = [50 * 10**6]
+
+# Allow user to supply sizes via command-line or interactively in the console.
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument('--sizes', help='Comma-separated list of record counts (e.g. 10000000,50000000)')
+parser.add_argument('-y', '--yes', action='store_true', help='Accept defaults without prompting')
+args, _unknown = parser.parse_known_args()
+
+if args.sizes:
+    try:
+        DATA_SIZES = [int(s.strip()) for s in args.sizes.split(',') if s.strip()]
+        if not DATA_SIZES:
+            raise ValueError()
+    except ValueError:
+        print(f"Invalid --sizes value: '{args.sizes}'. Expected comma-separated integers.")
+        sys.exit(1)
+else:
+    # Interactive prompt if running in a TTY and user didn't pass -y
+    if sys.stdin.isatty() and not args.yes:
+        print(f"Default data sizes: {DEFAULT_SIZES}")
+        resp = input("Press Enter to accept, or enter comma-separated sizes: ").strip()
+        if resp == "":
+            DATA_SIZES = DEFAULT_SIZES
+        else:
+            try:
+                DATA_SIZES = [int(s.strip()) for s in resp.split(',') if s.strip()]
+                if not DATA_SIZES:
+                    raise ValueError()
+            except ValueError:
+                print("Invalid input. Expected comma-separated integers. Exiting.")
+                sys.exit(1)
+    else:
+        DATA_SIZES = DEFAULT_SIZES
 
 # Subdirectory locations for each executable
 EXECUTABLE_PATHS = {

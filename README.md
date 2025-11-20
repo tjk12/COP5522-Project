@@ -79,6 +79,8 @@ python3 3_build_report.py
 ```bash
 # Generate multiple sizes
 python3 1_generate_data.py 10000000 50000000 100000000
+
+python3 2_run_experiments.py --sizes 10000000
 ```
 
 ## Expected Output
