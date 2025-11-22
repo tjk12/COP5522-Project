@@ -6,13 +6,29 @@
 #include <fstream>
 #include <cmath>
 #include <numeric>
-#include "json.hpp"
+#include <cstring> // For std::memcmp
 #include <omp.h> // For omp simd
+#include "json.hpp"
 
 using json = nlohmann::json;
 
-// --- Utility Functions (unchanged) ---
-std::vector<unsigned int> read_data(const std::string& filename) {
+// --- Data Structures ---
+struct Record {
+    unsigned char data[100];
+
+    // Compare first 10 bytes (Key)
+    bool operator<(const Record& other) const {
+        return std::memcmp(data, other.data, 10) < 0;
+    }
+    
+    // Helper for Radix Sort to get a specific byte of the key
+    unsigned char key_byte(int byte_index) const {
+        return data[byte_index];
+    }
+};
+
+// --- Utility Functions ---
+std::vector<Record> read_data(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
         std::cerr << "Error opening file: " << filename << std::endl;
@@ -23,22 +39,30 @@ std::vector<unsigned int> read_data(const std::string& filename) {
     long long file_size = file.tellg();
     file.seekg(0, std::ios::beg);
     long long num_records = file_size / RECORD_SIZE;
-    std::vector<unsigned int> data;
-    data.reserve(num_records);
-    char buffer[RECORD_SIZE];
-    for (long long i = 0; i < num_records; ++i) {
-        if (!file.read(buffer, RECORD_SIZE)) {
-            std::cerr << "Error reading record " << i << " from file." << std::endl;
+    
+    std::vector<Record> data(num_records);
+    
+    // Read in chunks to avoid issues with reading > 2GB/4GB in a single call on Windows
+    char* buffer_ptr = reinterpret_cast<char*>(data.data());
+    long long bytes_remaining = file_size;
+    const long long CHUNK_SIZE = 1024 * 1024 * 1024; // 1 GB chunks
+
+    while (bytes_remaining > 0) {
+        long long bytes_to_read = std::min(bytes_remaining, CHUNK_SIZE);
+        if (!file.read(buffer_ptr, bytes_to_read)) {
+            std::cerr << "Error reading file." << std::endl;
             exit(1);
         }
-        data.push_back(*reinterpret_cast<unsigned int*>(buffer));
+        buffer_ptr += bytes_to_read;
+        bytes_remaining -= bytes_to_read;
     }
+    
     return data;
 }
 
-bool is_sorted(const std::vector<unsigned int>& data) {
+bool is_sorted(const std::vector<Record>& data) {
     for (size_t i = 0; i + 1 < data.size(); ++i) {
-        if (data[i] > data[i + 1]) {
+        if (data[i+1] < data[i]) {
             return false;
         }
     }
@@ -46,13 +70,13 @@ bool is_sorted(const std::vector<unsigned int>& data) {
 }
 
 // --- Optimized Sequential Merge Sort (Iterative with Ping-Pong Buffer) ---
-void merge_sort(std::vector<unsigned int>& data) {
+void merge_sort(std::vector<Record>& data) {
     int n = data.size();
     if (n <= 1) return;
 
-    std::vector<unsigned int> temp_buffer(n);
-    std::vector<unsigned int>* src = &data;
-    std::vector<unsigned int>* dst = &temp_buffer;
+    std::vector<Record> temp_buffer(n);
+    std::vector<Record>* src = &data;
+    std::vector<Record>* dst = &temp_buffer;
 
     // Start with small sorts, then merge iteratively
     const int initial_sort_size = 16;
@@ -76,23 +100,25 @@ void merge_sort(std::vector<unsigned int>& data) {
 
     // If the final result is in the temp buffer, copy it back
     if (src != &data) {
-        std::copy(src->begin(), src->end(), data.begin());
+        #pragma omp simd
+        for (int i = 0; i < n; ++i) {
+            data[i] = (*src)[i];
+        }
     }
 }
 
 // --- Optimized Sequential Radix Sort (Histogram-based) ---
-void radix_sort_pass(std::vector<unsigned int>& data, int byte_num) {
+void radix_sort_pass(std::vector<Record>& data, int byte_num) {
     int n = data.size();
     if (n == 0) return;
 
-    std::vector<unsigned int> temp_buffer(n);
-    int shift = byte_num * 8;
+    std::vector<Record> temp_buffer(n);
     const int BUCKET_SIZE = 256;
 
     // Step 1: Create histogram
     std::vector<int> counts(BUCKET_SIZE, 0);
     for (int i = 0; i < n; ++i) {
-        counts[(data[i] >> shift) & 0xFF]++;
+        counts[data[i].key_byte(byte_num)]++;
     }
 
     // Step 2: Compute prefix sum (offsets)
@@ -102,8 +128,9 @@ void radix_sort_pass(std::vector<unsigned int>& data, int byte_num) {
     }
 
     // Step 3: Place elements in sorted order into temp buffer
+    // Note: This step is hard to vectorize due to random access writes (scatter)
     for (int i = 0; i < n; ++i) {
-        int bucket_index = (data[i] >> shift) & 0xFF;
+        int bucket_index = data[i].key_byte(byte_num);
         temp_buffer[offsets[bucket_index]++] = data[i];
     }
 
@@ -114,8 +141,9 @@ void radix_sort_pass(std::vector<unsigned int>& data, int byte_num) {
     }
 }
 
-void radix_sort(std::vector<unsigned int>& data) {
-    for (int i = 0; i < 4; ++i) { // 4 passes for 32-bit integers
+void radix_sort(std::vector<Record>& data) {
+    // 10 passes for 10-byte keys, starting from the least significant byte (index 9) down to 0
+    for (int i = 9; i >= 0; --i) {
         radix_sort_pass(data, i);
     }
 }

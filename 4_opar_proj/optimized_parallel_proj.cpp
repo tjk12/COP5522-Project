@@ -6,15 +6,31 @@
 #include <fstream>
 #include <cmath>
 #include <numeric>
+#include <cstring> // For std::memcmp
 #include <mpi.h>
 #include <omp.h>
 #include "json.hpp"
 
 using json = nlohmann::json;
 
+// --- Data Structures ---
+struct Record {
+    unsigned char data[100];
+
+    // Compare first 10 bytes (Key)
+    bool operator<(const Record& other) const {
+        return std::memcmp(data, other.data, 10) < 0;
+    }
+    
+    // Helper for Radix Sort to get a specific byte of the key
+    unsigned char key_byte(int byte_index) const {
+        return data[byte_index];
+    }
+};
+
 // --- Utility Functions ---
-std::vector<unsigned int> read_data(const std::string& filename, int rank) {
-    std::vector<unsigned int> data;
+std::vector<Record> read_data(const std::string& filename, int rank) {
+    std::vector<Record> data;
     if (rank == 0) {
         std::ifstream file(filename, std::ios::binary);
         if (!file) {
@@ -26,22 +42,30 @@ std::vector<unsigned int> read_data(const std::string& filename, int rank) {
         long long file_size = file.tellg();
         file.seekg(0, std::ios::beg);
         long long num_records = file_size / RECORD_SIZE;
-        data.reserve(num_records);
-        char buffer[RECORD_SIZE];
-        for (long long i = 0; i < num_records; ++i) {
-            if (!file.read(buffer, RECORD_SIZE)) {
-                std::cerr << "Error reading record " << i << " from file." << std::endl;
+        
+        data.resize(num_records);
+        
+        // Read in chunks to avoid issues with reading > 2GB/4GB in a single call on Windows
+        char* buffer_ptr = reinterpret_cast<char*>(data.data());
+        long long bytes_remaining = file_size;
+        const long long CHUNK_SIZE = 1024 * 1024 * 1024; // 1 GB chunks
+
+        while (bytes_remaining > 0) {
+            long long bytes_to_read = std::min(bytes_remaining, CHUNK_SIZE);
+            if (!file.read(buffer_ptr, bytes_to_read)) {
+                std::cerr << "Error reading file." << std::endl;
                 MPI_Abort(MPI_COMM_WORLD, 1);
             }
-            data.push_back(*reinterpret_cast<unsigned int*>(buffer));
+            buffer_ptr += bytes_to_read;
+            bytes_remaining -= bytes_to_read;
         }
     }
     return data;
 }
 
-bool is_sorted(const std::vector<unsigned int>& data) {
+bool is_sorted(const std::vector<Record>& data) {
     for (size_t i = 0; i + 1 < data.size(); ++i) {
-        if (data[i] > data[i + 1]) {
+        if (data[i+1] < data[i]) {
             return false;
         }
     }
@@ -49,7 +73,7 @@ bool is_sorted(const std::vector<unsigned int>& data) {
 }
 
 // --- Optimized Hybrid MPI+OpenMP Merge Sort ---
-void merge_sort(std::vector<unsigned int>& data, int rank, int world_size) {
+void merge_sort(std::vector<Record>& data, int rank, int world_size) {
     // Ensure data is only non-empty on rank 0
     if (rank != 0) {
         data.clear();
@@ -64,22 +88,26 @@ void merge_sort(std::vector<unsigned int>& data, int rank, int world_size) {
     int chunk_size = n_global / world_size;
     int remainder = n_global % world_size;
     for (int i = 0; i < world_size; ++i) {
-        sendcounts[i] = chunk_size + (i < remainder ? 1 : 0);
+        sendcounts[i] = (chunk_size + (i < remainder ? 1 : 0)) * sizeof(Record);
         if (i > 0) displs[i] = displs[i - 1] + sendcounts[i - 1];
     }
 
-    std::vector<unsigned int> local_data(sendcounts[rank]);
+    int local_bytes = sendcounts[rank];
+    int local_count = local_bytes / sizeof(Record);
+    std::vector<Record> local_data(local_count);
+    
     // Ensure send buffer is valid on rank 0
     if (rank == 0 && data.empty()) {
         data.resize(n_global);
     }
-    MPI_Scatterv(rank == 0 ? data.data() : nullptr, sendcounts.data(), displs.data(), MPI_UNSIGNED,
-                 local_data.data(), sendcounts[rank], MPI_UNSIGNED, 0, MPI_COMM_WORLD);
+    
+    MPI_Scatterv(rank == 0 ? data.data() : nullptr, sendcounts.data(), displs.data(), MPI_BYTE,
+                 local_data.data(), local_bytes, MPI_BYTE, 0, MPI_COMM_WORLD);
 
     // Step 2: Each process uses OpenMP to sort its local data
     int n_local = local_data.size();
     if (n_local > 0) {
-        std::vector<unsigned int> temp_buffer(n_local);
+        std::vector<Record> temp_buffer(n_local);
         bool in_data = true;
         int initial_merge_size = 1;
 
@@ -101,8 +129,8 @@ void merge_sort(std::vector<unsigned int>& data, int rank, int world_size) {
 
         // The merge starts from the size of the blocks we just sorted.
         for (int merge_size = initial_merge_size; merge_size < n_local; merge_size *= 2) {
-            std::vector<unsigned int>& src = in_data ? local_data : temp_buffer;
-            std::vector<unsigned int>& dst = in_data ? temp_buffer : local_data;
+            std::vector<Record>& src = in_data ? local_data : temp_buffer;
+            std::vector<Record>& dst = in_data ? temp_buffer : local_data;
             #pragma omp parallel for
             for (int i = 0; i < n_local; i += 2 * merge_size) {
                 int start1 = i;
@@ -128,17 +156,18 @@ void merge_sort(std::vector<unsigned int>& data, int rank, int world_size) {
     for (int step = 1; step < world_size; step *= 2) {
         if (rank % (2 * step) != 0) {
             int dest = rank - step;
-            int size = local_data.size();
-            MPI_Send(&size, 1, MPI_INT, dest, 0, MPI_COMM_WORLD);
-            MPI_Send(local_data.data(), size, MPI_UNSIGNED, dest, 1, MPI_COMM_WORLD);
+            int size_bytes = local_data.size() * sizeof(Record);
+            MPI_Send(&size_bytes, 1, MPI_INT, dest, 0, MPI_COMM_WORLD);
+            MPI_Send(local_data.data(), size_bytes, MPI_BYTE, dest, 1, MPI_COMM_WORLD);
             break;
         } else if (rank + step < world_size) {
             int src = rank + step;
-            int received_size;
-            MPI_Recv(&received_size, 1, MPI_INT, src, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            std::vector<unsigned int> received_data(received_size);
-            MPI_Recv(received_data.data(), received_size, MPI_UNSIGNED, src, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            std::vector<unsigned int> merged_data(local_data.size() + received_size);
+            int received_bytes;
+            MPI_Recv(&received_bytes, 1, MPI_INT, src, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            int received_count = received_bytes / sizeof(Record);
+            std::vector<Record> received_data(received_count);
+            MPI_Recv(received_data.data(), received_bytes, MPI_BYTE, src, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            std::vector<Record> merged_data(local_data.size() + received_count);
             std::merge(local_data.begin(), local_data.end(), received_data.begin(), received_data.end(), merged_data.begin());
             local_data = merged_data;
         }
@@ -150,11 +179,10 @@ void merge_sort(std::vector<unsigned int>& data, int rank, int world_size) {
 }
 
 // --- Optimized Hybrid MPI+OpenMP Radix Sort ---
-void radix_sort_pass(std::vector<unsigned int>& local_data, int byte_num, int rank, int world_size) {
+void radix_sort_pass(std::vector<Record>& local_data, int byte_num, int rank, int world_size) {
     int n_local = local_data.size();
     if (n_local == 0 && world_size == 1) return;
 
-    int shift = byte_num * 8;
     const int BUCKET_SIZE = 256;
     int num_threads = omp_get_max_threads();
 
@@ -165,7 +193,7 @@ void radix_sort_pass(std::vector<unsigned int>& local_data, int byte_num, int ra
     #pragma omp parallel for schedule(static)
     for (int i = 0; i < n_local; ++i) {
         int thread_id = omp_get_thread_num();
-        all_histograms[thread_id * BUCKET_SIZE + ((local_data[i] >> shift) & 0xFF)]++;
+        all_histograms[thread_id * BUCKET_SIZE + local_data[i].key_byte(byte_num)]++;
     }
 
     // Reduce the thread-local histograms into a single process-local histogram.
@@ -183,43 +211,59 @@ void radix_sort_pass(std::vector<unsigned int>& local_data, int byte_num, int ra
 
     // Step 3: Determine send/recv counts for MPI_Alltoallv
     std::vector<int> to_send_counts(world_size, 0);
-    std::vector<std::vector<unsigned int>> to_send_buckets(world_size);
+    std::vector<std::vector<Record>> to_send_buckets(world_size);
     int buckets_per_proc = (BUCKET_SIZE + world_size - 1) / world_size;
+    
     for (const auto& val : local_data) {
-        int bucket_idx = (val >> shift) & 0xFF;
+        int bucket_idx = val.key_byte(byte_num);
         int dest_proc = std::min(bucket_idx / buckets_per_proc, world_size - 1);
         to_send_buckets[dest_proc].push_back(val);
     }
+    
+    // We need to send counts in BYTES for Alltoallv later, but Alltoall expects counts of INTEGERS
+    // So we exchange the number of RECORDS first
+    std::vector<int> to_send_num_records(world_size);
     for (int p = 0; p < world_size; ++p) {
-        to_send_counts[p] = to_send_buckets[p].size();
+        to_send_num_records[p] = to_send_buckets[p].size();
     }
 
-    std::vector<int> to_recv_counts(world_size, 0);
-    MPI_Alltoall(to_send_counts.data(), 1, MPI_INT, to_recv_counts.data(), 1, MPI_INT, MPI_COMM_WORLD);
+    std::vector<int> to_recv_num_records(world_size, 0);
+    MPI_Alltoall(to_send_num_records.data(), 1, MPI_INT, to_recv_num_records.data(), 1, MPI_INT, MPI_COMM_WORLD);
 
     // Step 4: Exchange data with MPI_Alltoallv
+    std::vector<int> send_bytes(world_size), recv_bytes(world_size);
     std::vector<int> sdispls(world_size, 0), rdispls(world_size, 0);
-    std::vector<unsigned int> send_buf;
+    
+    std::vector<Record> send_buf;
     send_buf.reserve(n_local);
+    
     for (int p = 0; p < world_size; ++p) {
-        if (p > 0) sdispls[p] = sdispls[p - 1] + to_send_counts[p - 1];
+        send_bytes[p] = to_send_num_records[p] * sizeof(Record);
+        recv_bytes[p] = to_recv_num_records[p] * sizeof(Record);
+        
+        if (p > 0) {
+            sdispls[p] = sdispls[p - 1] + send_bytes[p - 1];
+            rdispls[p] = rdispls[p - 1] + recv_bytes[p - 1];
+        }
         send_buf.insert(send_buf.end(), to_send_buckets[p].begin(), to_send_buckets[p].end());
     }
-    int total_recv = 0;
+    
+    int total_recv_bytes = 0;
     for (int p = 0; p < world_size; ++p) {
-        if (p > 0) rdispls[p] = rdispls[p - 1] + to_recv_counts[p - 1];
-        total_recv += to_recv_counts[p];
+        total_recv_bytes += recv_bytes[p];
     }
-    std::vector<unsigned int> recv_buf(total_recv);
-    MPI_Alltoallv(send_buf.data(), to_send_counts.data(), sdispls.data(), MPI_UNSIGNED,
-                  recv_buf.data(), to_recv_counts.data(), rdispls.data(), MPI_UNSIGNED,
+    
+    std::vector<Record> recv_buf(total_recv_bytes / sizeof(Record));
+    
+    MPI_Alltoallv(send_buf.data(), send_bytes.data(), sdispls.data(), MPI_BYTE,
+                  recv_buf.data(), recv_bytes.data(), rdispls.data(), MPI_BYTE,
                   MPI_COMM_WORLD);
 
     // Step 5: Parallel local sort/placement of received data (OpenMP)
     local_data = recv_buf;
     int n_received = local_data.size();
     if (n_received > 0) {
-        std::vector<unsigned int> temp_buffer(n_received);
+        std::vector<Record> temp_buffer(n_received);
         bool in_data = true;
         int initial_merge_size = 1;
         #pragma omp parallel
@@ -256,7 +300,7 @@ void radix_sort_pass(std::vector<unsigned int>& local_data, int byte_num, int ra
     }
 }
 
-void radix_sort(std::vector<unsigned int>& data, int rank, int world_size) {
+void radix_sort(std::vector<Record>& data, int rank, int world_size) {
     // Ensure data is only non-empty on rank 0
     if (rank != 0) {
         data.clear();
@@ -271,26 +315,30 @@ void radix_sort(std::vector<unsigned int>& data, int rank, int world_size) {
     int chunk_size = n_global / world_size;
     int remainder = n_global % world_size;
     for (int i = 0; i < world_size; ++i) {
-        sendcounts[i] = chunk_size + (i < remainder ? 1 : 0);
+        sendcounts[i] = (chunk_size + (i < remainder ? 1 : 0)) * sizeof(Record);
         if (i > 0) displs[i] = displs[i - 1] + sendcounts[i - 1];
     }
 
-    std::vector<unsigned int> local_data(sendcounts[rank]);
+    int local_bytes = sendcounts[rank];
+    int local_count = local_bytes / sizeof(Record);
+    std::vector<Record> local_data(local_count);
+    
     // Ensure send buffer is valid on rank 0
     if (rank == 0 && data.empty()) {
         data.resize(n_global);
     }
-    MPI_Scatterv(rank == 0 ? data.data() : nullptr, sendcounts.data(), displs.data(), MPI_UNSIGNED,
-                 local_data.data(), sendcounts[rank], MPI_UNSIGNED, 0, MPI_COMM_WORLD);
+    MPI_Scatterv(rank == 0 ? data.data() : nullptr, sendcounts.data(), displs.data(), MPI_BYTE,
+                 local_data.data(), local_bytes, MPI_BYTE, 0, MPI_COMM_WORLD);
 
-    for (int i = 0; i < 4; ++i) {
+    // 10 passes for 10-byte keys
+    for (int i = 9; i >= 0; --i) {
         radix_sort_pass(local_data, i, rank, world_size);
     }
 
     // Gather all sorted parts to the root process
-    int local_size = local_data.size();
+    int local_size_bytes = local_data.size() * sizeof(Record);
     std::vector<int> recvcounts(world_size);
-    MPI_Gather(&local_size, 1, MPI_INT, recvcounts.data(), 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Gather(&local_size_bytes, 1, MPI_INT, recvcounts.data(), 1, MPI_INT, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
         displs[0] = 0;
@@ -300,8 +348,8 @@ void radix_sort(std::vector<unsigned int>& data, int rank, int world_size) {
         data.resize(n_global);
     }
 
-    MPI_Gatherv(local_data.data(), local_data.size(), MPI_UNSIGNED,
-                rank == 0 ? data.data() : nullptr, recvcounts.data(), displs.data(), MPI_UNSIGNED,
+    MPI_Gatherv(local_data.data(), local_size_bytes, MPI_BYTE,
+                rank == 0 ? data.data() : nullptr, recvcounts.data(), displs.data(), MPI_BYTE,
                 0, MPI_COMM_WORLD);
 }
 

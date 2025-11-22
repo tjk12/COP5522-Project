@@ -4,14 +4,28 @@
 #include <algorithm>
 #include <chrono>
 #include <fstream>
-#include <cmath>
-#include <numeric>
+#include <cstring> // For std::memcmp
 #include "json.hpp"
 
 using json = nlohmann::json;
 
-// Utility Functions
-std::vector<unsigned int> read_data(const std::string& filename) {
+// --- Data Structures ---
+struct Record {
+    unsigned char data[100];
+
+    // Compare first 10 bytes (Key)
+    bool operator<(const Record& other) const {
+        return std::memcmp(data, other.data, 10) < 0;
+    }
+    
+    // Helper for Radix Sort to get a specific byte of the key
+    unsigned char key_byte(int byte_index) const {
+        return data[byte_index];
+    }
+};
+
+// --- Utility Functions ---
+std::vector<Record> read_data(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
         std::cerr << "Error opening file: " << filename << std::endl;
@@ -22,22 +36,30 @@ std::vector<unsigned int> read_data(const std::string& filename) {
     long long file_size = file.tellg();
     file.seekg(0, std::ios::beg);
     long long num_records = file_size / RECORD_SIZE;
-    std::vector<unsigned int> data;
-    data.reserve(num_records);
-    char buffer[RECORD_SIZE];
-    for (long long i = 0; i < num_records; ++i) {
-        if (!file.read(buffer, RECORD_SIZE)) {
-            std::cerr << "Error reading record " << i << " from file." << std::endl;
+    
+    std::vector<Record> data(num_records);
+    
+    // Read in chunks to avoid issues with reading > 2GB/4GB in a single call on Windows
+    char* buffer_ptr = reinterpret_cast<char*>(data.data());
+    long long bytes_remaining = file_size;
+    const long long CHUNK_SIZE = 1024 * 1024 * 1024; // 1 GB chunks
+
+    while (bytes_remaining > 0) {
+        long long bytes_to_read = std::min(bytes_remaining, CHUNK_SIZE);
+        if (!file.read(buffer_ptr, bytes_to_read)) {
+            std::cerr << "Error reading file." << std::endl;
             exit(1);
         }
-        data.push_back(*reinterpret_cast<unsigned int*>(buffer));
+        buffer_ptr += bytes_to_read;
+        bytes_remaining -= bytes_to_read;
     }
+    
     return data;
 }
 
-bool is_sorted(const std::vector<unsigned int>& data) {
+bool is_sorted(const std::vector<Record>& data) {
     for (size_t i = 0; i + 1 < data.size(); ++i) {
-        if (data[i] > data[i + 1]) {
+        if (data[i+1] < data[i]) { // If next is smaller than current, it's unsorted
             return false;
         }
     }
@@ -45,7 +67,7 @@ bool is_sorted(const std::vector<unsigned int>& data) {
 }
 
 // --- Basic Sequential Merge Sort (Recursive) ---
-void merge_sort_recursive(std::vector<unsigned int>& data, std::vector<unsigned int>& temp, int left, int right) {
+void merge_sort_recursive(std::vector<Record>& data, std::vector<Record>& temp, int left, int right) {
     if (left >= right) {
         return;
     }
@@ -58,40 +80,40 @@ void merge_sort_recursive(std::vector<unsigned int>& data, std::vector<unsigned 
     std::copy(temp.begin() + left, temp.begin() + right + 1, data.begin() + left);
 }
 
-void merge_sort(std::vector<unsigned int>& data) {
+void merge_sort(std::vector<Record>& data) {
     if (data.empty()) return;
-    std::vector<unsigned int> temp(data.size());
+    std::vector<Record> temp(data.size());
     merge_sort_recursive(data, temp, 0, data.size() - 1);
 }
 
 // --- Basic Sequential Radix Sort (using buckets) ---
-void radix_sort_pass(std::vector<unsigned int>& data, int byte_num) {
+void radix_sort_pass(std::vector<Record>& data, int byte_index) {
     int n = data.size();
     if (n == 0) return;
 
-    int shift = byte_num * 8;
     const int BUCKET_SIZE = 256;
 
     // Create 256 buckets
-    std::vector<std::vector<unsigned int>> buckets(BUCKET_SIZE);
+    std::vector<std::vector<Record>> buckets(BUCKET_SIZE);
 
     // Step 1: Distribute elements into buckets
     for (int i = 0; i < n; ++i) {
-        int bucket_index = (data[i] >> shift) & 0xFF;
+        int bucket_index = data[i].key_byte(byte_index);
         buckets[bucket_index].push_back(data[i]);
     }
 
     // Step 2: Gather elements from buckets back into the original array
     int current_pos = 0;
     for (int i = 0; i < BUCKET_SIZE; ++i) {
-        for (unsigned int val : buckets[i]) {
+        for (const auto& val : buckets[i]) {
             data[current_pos++] = val;
         }
     }
 }
 
-void radix_sort(std::vector<unsigned int>& data) {
-    for (int i = 0; i < 4; ++i) { // 4 passes for 32-bit integers
+void radix_sort(std::vector<Record>& data) {
+    // 10 passes for 10-byte keys, starting from the least significant byte (index 9) down to 0
+    for (int i = 9; i >= 0; --i) {
         radix_sort_pass(data, i);
     }
 }

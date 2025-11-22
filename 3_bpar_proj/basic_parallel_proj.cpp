@@ -6,14 +6,29 @@
 #include <fstream>
 #include <cmath>
 #include <numeric>
+#include <cstring> // For std::memcmp
 #include <omp.h>
 #include "json.hpp"
 
 using json = nlohmann::json;
 
+// --- Data Structures ---
+struct Record {
+    unsigned char data[100];
+
+    // Compare first 10 bytes (Key)
+    bool operator<(const Record& other) const {
+        return std::memcmp(data, other.data, 10) < 0;
+    }
+    
+    // Helper for Radix Sort to get a specific byte of the key
+    unsigned char key_byte(int byte_index) const {
+        return data[byte_index];
+    }
+};
+
 // --- Utility Functions ---
-std::vector<unsigned int> read_data(const std::string& filename) {
-    std::vector<unsigned int> data;
+std::vector<Record> read_data(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary);
     if (!file) {
         std::cerr << "Error opening file: " << filename << std::endl;
@@ -24,21 +39,30 @@ std::vector<unsigned int> read_data(const std::string& filename) {
     long long file_size = file.tellg();
     file.seekg(0, std::ios::beg);
     long long num_records = file_size / RECORD_SIZE;
-    data.reserve(num_records);
-    char buffer[RECORD_SIZE];
-    for (long long i = 0; i < num_records; ++i) {
-        if (!file.read(buffer, RECORD_SIZE)) {
-            std::cerr << "Error reading record " << i << " from file." << std::endl;
+    
+    std::vector<Record> data(num_records);
+    
+    // Read in chunks to avoid issues with reading > 2GB/4GB in a single call on Windows
+    char* buffer_ptr = reinterpret_cast<char*>(data.data());
+    long long bytes_remaining = file_size;
+    const long long CHUNK_SIZE = 1024 * 1024 * 1024; // 1 GB chunks
+
+    while (bytes_remaining > 0) {
+        long long bytes_to_read = std::min(bytes_remaining, CHUNK_SIZE);
+        if (!file.read(buffer_ptr, bytes_to_read)) {
+            std::cerr << "Error reading file." << std::endl;
             exit(1);
         }
-        data.push_back(*reinterpret_cast<unsigned int*>(buffer));
+        buffer_ptr += bytes_to_read;
+        bytes_remaining -= bytes_to_read;
     }
+    
     return data;
 }
 
-bool is_sorted(const std::vector<unsigned int>& data) {
+bool is_sorted(const std::vector<Record>& data) {
     for (size_t i = 0; i + 1 < data.size(); ++i) {
-        if (data[i] > data[i + 1]) {
+        if (data[i+1] < data[i]) {
             return false;
         }
     }
@@ -46,7 +70,7 @@ bool is_sorted(const std::vector<unsigned int>& data) {
 }
 
 // --- Basic OpenMP Merge Sort ---
-void sort_merge(std::vector<unsigned int>& data) {
+void sort_merge(std::vector<Record>& data) {
     int num_threads = omp_get_max_threads();
     int n_global = data.size();
     
@@ -86,7 +110,7 @@ void sort_merge(std::vector<unsigned int>& data) {
 
                 int left_len = left_end - left_start;
                 int right_len = right_end - right_start;
-                std::vector<unsigned int> merged(left_len + right_len);
+                std::vector<Record> merged(left_len + right_len);
                 std::merge(data.begin() + left_start, data.begin() + left_end,
                            data.begin() + right_start, data.begin() + right_end,
                            merged.begin());
@@ -111,7 +135,7 @@ void sort_merge(std::vector<unsigned int>& data) {
 }
 
 // --- Basic OpenMP Radix Sort ---
-void radix_sort(std::vector<unsigned int>& data) {
+void radix_sort(std::vector<Record>& data) {
     int num_threads = omp_get_max_threads();
     int n_global = data.size();
 
@@ -125,18 +149,17 @@ void radix_sort(std::vector<unsigned int>& data) {
     }
 
     const int BUCKET_SIZE = 256;
-    std::vector<unsigned int> temp_data(n_global);
+    std::vector<Record> temp_data(n_global);
 
-    for (int i = 0; i < 4; ++i) { // 4 passes for 32-bit integers
-        int shift = i * 8;
-
+    // 10 passes for 10-byte keys, starting from the least significant byte (index 9) down to 0
+    for (int i = 9; i >= 0; --i) {
         // 1. Thread-local histograms
         std::vector<std::vector<int>> thread_hists(num_threads, std::vector<int>(BUCKET_SIZE, 0));
         
         #pragma omp parallel for schedule(static, 1)
         for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
             for (int j = displs[thread_id]; j < displs[thread_id] + sendcounts[thread_id]; ++j) {
-                int bucket = (data[j] >> shift) & 0xFF;
+                int bucket = data[j].key_byte(i);
                 thread_hists[thread_id][bucket]++;
             }
         }
@@ -164,7 +187,7 @@ void radix_sort(std::vector<unsigned int>& data) {
         for (int thread_id = 0; thread_id < num_threads; ++thread_id) {
             std::vector<int> local_positions(BUCKET_SIZE, 0);
             for (int j = displs[thread_id]; j < displs[thread_id] + sendcounts[thread_id]; ++j) {
-                int bucket = (data[j] >> shift) & 0xFF;
+                int bucket = data[j].key_byte(i);
                 local_positions[bucket]++;
             }
             bucket_positions[thread_id] = local_positions;
@@ -182,7 +205,7 @@ void radix_sort(std::vector<unsigned int>& data) {
             }
             
             for (int j = displs[thread_id]; j < displs[thread_id] + sendcounts[thread_id]; ++j) {
-                int bucket = (data[j] >> shift) & 0xFF;
+                int bucket = data[j].key_byte(i);
                 temp_data[positions[bucket]++] = data[j];
             }
         }
