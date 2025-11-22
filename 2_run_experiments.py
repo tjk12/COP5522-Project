@@ -37,13 +37,24 @@ RESULTS_FILE = Path("results.json")
 PROJECT_ROOT = Path.cwd()
 
 # Experiment Definitions
-# Default data sizes (records)
-DEFAULT_SIZES = [50 * 10**6]
+DEFAULT_SIZES = [
+    6_250_000,
+    12_500_000,
+    25_000_000,
+    50_000_000,
+    100_000_000,
+    200_000_000,
+    400_000_000
+]
+
+# Max size for sequential experiments to avoid excessive runtime
+MAX_SEQUENTIAL_SIZE = 100_000_000
 
 # Allow user to supply sizes via command-line or interactively in the console.
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument('--sizes', help='Comma-separated list of record counts (e.g. 10000000,50000000)')
 parser.add_argument('-y', '--yes', action='store_true', help='Accept defaults without prompting')
+parser.add_argument('--no-mpi', action='store_true', help='Disable MPI experiments')
 args, _unknown = parser.parse_known_args()
 
 if args.sizes:
@@ -82,6 +93,7 @@ EXECUTABLE_PATHS = {
                              "optimized_mpi_sorter")
 }
 
+
 EXPERIMENTS = {
     "sequential": {
         "enabled": True,
@@ -92,7 +104,7 @@ EXPERIMENTS = {
                 "radix_sort"
             ],
         },
-        "threads": [1],
+        "threads": [1], # Sequential is always single-threaded
     },
     "openmp": {
         "enabled": True,
@@ -102,18 +114,18 @@ EXPERIMENTS = {
                 "radix_sort"
             ],
         },
-        "threads": [1, 2, 4, 8]
+        "threads": [1, 2, 4, 8, 16, 32, 64, 128] # Bridges has 128 cores per node, Adjust as needed
     },
     "mpi": {
-        "enabled": True,
+        "enabled": not args.no_mpi,
         "executables": {
             "optimized_mpi_sorter": [
                 "merge_sort",
                 "radix_sort"
             ],
         },
-        "processes": [1, 2, 3, 4, 5],
-        "threads_per_process": [1, 2, 4, 8]
+        "processes": [1, 2, 3, 4, 5], # Use 5 nodes max
+        "threads_per_process": [1, 2, 4, 8, 16, 32, 64, 128] # Bridges has 128 cores per node, Adjust as needed
     }
 }
 
@@ -288,6 +300,9 @@ def main():
             algos = (
                 EXPERIMENTS['sequential']['executables'][exe])
             for size in DATA_SIZES:
+                if size > MAX_SEQUENTIAL_SIZE:
+                    print(f"Skipping sequential sort for N={size} (exceeds limit)")
+                    continue
                 data_file = DATA_DIR / f"data_{size}.bin"
                 for algo in algos:
                     cmd = [exe_path, algo, str(data_file)]

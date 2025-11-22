@@ -27,7 +27,15 @@ scratch_dir = Path(os.getenv('PROJECT', Path.cwd()))
 DATA_DIR = scratch_dir / "sorting_project_data"
 
 # Default data sizes to generate
-DATA_SIZES = [50 * 10**6]
+DATA_SIZES = [
+    6_250_000,
+    12_500_000,
+    25_000_000,
+    50_000_000,
+    100_000_000,
+    200_000_000,
+    400_000_000
+]
 
 
 def run_command(cmd):
