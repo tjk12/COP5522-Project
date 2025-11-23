@@ -345,8 +345,10 @@ def main():
                 data_file = DATA_DIR / f"data_{size}.bin"
                 for algo in algos:
                     cmd = [exe_path, algo, str(data_file)]
+                    # Determine title based on executable name for accurate checking
+                    title = "Basic Sequential Sorter" if "basic" in exe else "Optimized Sequential Sorter"
                     run_and_collect(cmd, all_results,
-                                    check_params={'algorithm': algo, 'N': size})
+                                    check_params={'algorithm': algo, 'N': size, 'Title': title})
 
     # OpenMP
     if EXPERIMENTS['openmp']['enabled']:

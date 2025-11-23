@@ -107,44 +107,44 @@ void merge_sort(std::vector<Record>& data) {
     }
 }
 
-// --- Optimized Sequential Radix Sort (Histogram-based) ---
-void radix_sort_pass(std::vector<Record>& data, int byte_num) {
+// --- Optimized Sequential Radix Sort (Ping-Pong) ---
+void radix_sort(std::vector<Record>& data) {
     int n = data.size();
     if (n == 0) return;
 
-    std::vector<Record> temp_buffer(n);
-    const int BUCKET_SIZE = 256;
+    std::vector<Record> buffer(n);
+    bool in_data = true; // true if valid data is in 'data', false if in 'buffer'
 
-    // Step 1: Create histogram
-    std::vector<int> counts(BUCKET_SIZE, 0);
-    for (int i = 0; i < n; ++i) {
-        counts[data[i].key_byte(byte_num)]++;
+    // 10 passes for 10-byte keys
+    for (int byte_idx = 9; byte_idx >= 0; --byte_idx) {
+        const std::vector<Record>& src = in_data ? data : buffer;
+        std::vector<Record>& dst = in_data ? buffer : data;
+
+        // 1. Histogram
+        int counts[256] = {0};
+        for (int i = 0; i < n; ++i) {
+            counts[src[i].key_byte(byte_idx)]++;
+        }
+
+        // 2. Prefix Sum (Offsets)
+        int offsets[256];
+        offsets[0] = 0;
+        for (int i = 1; i < 256; ++i) {
+            offsets[i] = offsets[i - 1] + counts[i - 1];
+        }
+
+        // 3. Scatter
+        for (int i = 0; i < n; ++i) {
+            int b = src[i].key_byte(byte_idx);
+            dst[offsets[b]++] = src[i];
+        }
+
+        in_data = !in_data;
     }
 
-    // Step 2: Compute prefix sum (offsets)
-    std::vector<int> offsets(BUCKET_SIZE, 0);
-    for (int i = 1; i < BUCKET_SIZE; ++i) {
-        offsets[i] = offsets[i - 1] + counts[i - 1];
-    }
-
-    // Step 3: Place elements in sorted order into temp buffer
-    // Note: This step is hard to vectorize due to random access writes (scatter)
-    for (int i = 0; i < n; ++i) {
-        int bucket_index = data[i].key_byte(byte_num);
-        temp_buffer[offsets[bucket_index]++] = data[i];
-    }
-
-    // Step 4: Copy sorted data back, with SIMD optimization hint
-    #pragma omp simd
-    for (int i = 0; i < n; ++i) {
-        data[i] = temp_buffer[i];
-    }
-}
-
-void radix_sort(std::vector<Record>& data) {
-    // 10 passes for 10-byte keys, starting from the least significant byte (index 9) down to 0
-    for (int i = 9; i >= 0; --i) {
-        radix_sort_pass(data, i);
+    // If final result is in buffer, copy back to data
+    if (!in_data) {
+        data = buffer;
     }
 }
 

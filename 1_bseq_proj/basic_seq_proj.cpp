@@ -86,35 +86,41 @@ void merge_sort(std::vector<Record>& data) {
     merge_sort_recursive(data, temp, 0, data.size() - 1);
 }
 
-// --- Basic Sequential Radix Sort (using buckets) ---
-void radix_sort_pass(std::vector<Record>& data, int byte_index) {
+// --- Basic Sequential Radix Sort (Standard LSD with Counting Sort) ---
+void radix_sort_pass(std::vector<Record>& data, std::vector<Record>& temp, int byte_index) {
     int n = data.size();
-    if (n == 0) return;
-
     const int BUCKET_SIZE = 256;
-
-    // Create 256 buckets
-    std::vector<std::vector<Record>> buckets(BUCKET_SIZE);
-
-    // Step 1: Distribute elements into buckets
+    
+    // 1. Histogram
+    std::vector<int> count(BUCKET_SIZE, 0);
     for (int i = 0; i < n; ++i) {
-        int bucket_index = data[i].key_byte(byte_index);
-        buckets[bucket_index].push_back(data[i]);
+        count[data[i].key_byte(byte_index)]++;
     }
 
-    // Step 2: Gather elements from buckets back into the original array
-    int current_pos = 0;
-    for (int i = 0; i < BUCKET_SIZE; ++i) {
-        for (const auto& val : buckets[i]) {
-            data[current_pos++] = val;
-        }
+    // 2. Prefix Sum (Offsets)
+    std::vector<int> offsets(BUCKET_SIZE);
+    offsets[0] = 0;
+    for (int i = 1; i < BUCKET_SIZE; ++i) {
+        offsets[i] = offsets[i - 1] + count[i - 1];
     }
+
+    // 3. Scatter to temp
+    for (int i = 0; i < n; ++i) {
+        int b = data[i].key_byte(byte_index);
+        temp[offsets[b]++] = data[i];
+    }
+
+    // 4. Copy back
+    data = temp;
 }
 
 void radix_sort(std::vector<Record>& data) {
-    // 10 passes for 10-byte keys, starting from the least significant byte (index 9) down to 0
+    if (data.empty()) return;
+    std::vector<Record> temp(data.size());
+    
+    // 10 passes for 10-byte keys
     for (int i = 9; i >= 0; --i) {
-        radix_sort_pass(data, i);
+        radix_sort_pass(data, temp, i);
     }
 }
 
