@@ -48,7 +48,7 @@ DEFAULT_SIZES = [
 ]
 
 # Max size for sequential experiments to avoid excessive runtime
-MAX_SEQUENTIAL_SIZE = 100_000_000
+MAX_SEQUENTIAL_SIZE = 40_000_000
 
 # Allow user to supply sizes via command-line or interactively in the console.
 parser = argparse.ArgumentParser(add_help=False)
