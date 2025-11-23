@@ -108,6 +108,29 @@ void merge_sort(std::vector<Record>& data) {
 }
 
 // --- Optimized Sequential Radix Sort (Ping-Pong) ---
+void radix_sort_pass(const std::vector<Record>& src, std::vector<Record>& dst, int byte_idx) {
+    int n = src.size();
+    
+    // 1. Histogram
+    int counts[256] = {0};
+    for (int i = 0; i < n; ++i) {
+        counts[src[i].key_byte(byte_idx)]++;
+    }
+
+    // 2. Prefix Sum (Offsets)
+    int offsets[256];
+    offsets[0] = 0;
+    for (int i = 1; i < 256; ++i) {
+        offsets[i] = offsets[i - 1] + counts[i - 1];
+    }
+
+    // 3. Scatter
+    for (int i = 0; i < n; ++i) {
+        int b = src[i].key_byte(byte_idx);
+        dst[offsets[b]++] = src[i];
+    }
+}
+
 void radix_sort(std::vector<Record>& data) {
     int n = data.size();
     if (n == 0) return;
@@ -117,28 +140,11 @@ void radix_sort(std::vector<Record>& data) {
 
     // 10 passes for 10-byte keys
     for (int byte_idx = 9; byte_idx >= 0; --byte_idx) {
-        const std::vector<Record>& src = in_data ? data : buffer;
-        std::vector<Record>& dst = in_data ? buffer : data;
-
-        // 1. Histogram
-        int counts[256] = {0};
-        for (int i = 0; i < n; ++i) {
-            counts[src[i].key_byte(byte_idx)]++;
+        if (in_data) {
+            radix_sort_pass(data, buffer, byte_idx);
+        } else {
+            radix_sort_pass(buffer, data, byte_idx);
         }
-
-        // 2. Prefix Sum (Offsets)
-        int offsets[256];
-        offsets[0] = 0;
-        for (int i = 1; i < 256; ++i) {
-            offsets[i] = offsets[i - 1] + counts[i - 1];
-        }
-
-        // 3. Scatter
-        for (int i = 0; i < n; ++i) {
-            int b = src[i].key_byte(byte_idx);
-            dst[offsets[b]++] = src[i];
-        }
-
         in_data = !in_data;
     }
 

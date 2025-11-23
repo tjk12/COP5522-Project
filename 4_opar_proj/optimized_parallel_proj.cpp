@@ -72,36 +72,47 @@ void safe_mpi_recv(std::vector<Record>& data, int src, int tag, MPI_Comm comm) {
 }
 
 // --- Utility Functions ---
-std::vector<Record> read_data(const std::string& filename, int rank) {
-    std::vector<Record> data;
-    if (rank == 0) {
-        std::ifstream file(filename, std::ios::binary);
-        if (!file) {
-            std::cerr << "Error opening file: " << filename << std::endl;
+
+// Parallel Read: Each rank reads its own chunk of the file
+std::vector<Record> read_data_parallel(const std::string& filename, int rank, int world_size) {
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) {
+        if (rank == 0) std::cerr << "Error opening file: " << filename << std::endl;
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    const int RECORD_SIZE = 100;
+    file.seekg(0, std::ios::end);
+    long long file_size = file.tellg();
+    long long total_records = file_size / RECORD_SIZE;
+
+    // Calculate chunk for this rank
+    long long records_per_proc = total_records / world_size;
+    long long remainder = total_records % world_size;
+    
+    long long my_start_idx = rank * records_per_proc + std::min((long long)rank, remainder);
+    long long my_count = records_per_proc + (rank < remainder ? 1 : 0);
+
+    std::vector<Record> data(my_count);
+    
+    // Seek to start position
+    file.seekg(my_start_idx * RECORD_SIZE, std::ios::beg);
+    
+    // Read in chunks (1GB)
+    char* buffer_ptr = reinterpret_cast<char*>(data.data());
+    long long bytes_remaining = my_count * RECORD_SIZE;
+    const long long CHUNK_SIZE = 1024 * 1024 * 1024; 
+
+    while (bytes_remaining > 0) {
+        long long bytes_to_read = std::min(bytes_remaining, CHUNK_SIZE);
+        if (!file.read(buffer_ptr, bytes_to_read)) {
+            std::cerr << "Error reading file on rank " << rank << std::endl;
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
-        const int RECORD_SIZE = 100;
-        file.seekg(0, std::ios::end);
-        long long file_size = file.tellg();
-        file.seekg(0, std::ios::beg);
-        long long num_records = file_size / RECORD_SIZE;
-        
-        data.resize(num_records);
-        
-        char* buffer_ptr = reinterpret_cast<char*>(data.data());
-        long long bytes_remaining = file_size;
-        const long long CHUNK_SIZE = 1024 * 1024 * 1024; // 1 GB chunks
-
-        while (bytes_remaining > 0) {
-            long long bytes_to_read = std::min(bytes_remaining, CHUNK_SIZE);
-            if (!file.read(buffer_ptr, bytes_to_read)) {
-                std::cerr << "Error reading file." << std::endl;
-                MPI_Abort(MPI_COMM_WORLD, 1);
-            }
-            buffer_ptr += bytes_to_read;
-            bytes_remaining -= bytes_to_read;
-        }
+        buffer_ptr += bytes_to_read;
+        bytes_remaining -= bytes_to_read;
     }
+
     return data;
 }
 
@@ -145,7 +156,6 @@ void local_radix_sort(std::vector<Record>& data) {
         }
         
         // 2. Compute Global Offsets (Prefix Sum)
-        // offsets[bucket][thread] -> where thread T should start writing for bucket B
         std::vector<int> offsets(256 * num_threads);
         int current_offset = 0;
         for (int b = 0; b < 256; ++b) {
@@ -159,7 +169,6 @@ void local_radix_sort(std::vector<Record>& data) {
         #pragma omp parallel
         {
             int tid = omp_get_thread_num();
-            // Local copy of offsets for this thread
             std::vector<int> local_offsets(256);
             for(int b=0; b<256; ++b) {
                 local_offsets[b] = offsets[b * num_threads + tid];
@@ -185,88 +194,49 @@ void local_radix_sort(std::vector<Record>& data) {
 
 // --- Optimized Merge Sort ---
 void merge_sort(std::vector<Record>& data, int rank, int world_size) {
-    // 1. Scatter
-    size_t n_global = 0;
-    if (rank == 0) n_global = data.size();
-    MPI_Bcast(&n_global, sizeof(size_t), MPI_BYTE, 0, MPI_COMM_WORLD);
-    
-    size_t chunk_size = n_global / world_size;
-    size_t remainder = n_global % world_size;
-    
-    std::vector<Record> local_data;
-    
-    if (rank == 0) {
-        // Send to others
-        size_t offset = 0;
-        for (int i = 0; i < world_size; ++i) {
-            size_t count = chunk_size + (i < remainder ? 1 : 0);
-            if (i == 0) {
-                // Keep local
-                local_data.assign(data.begin(), data.begin() + count);
-            } else {
-                std::vector<Record> temp_chunk(data.begin() + offset, data.begin() + offset + count);
-                safe_mpi_send(temp_chunk, i, 0, MPI_COMM_WORLD);
-            }
-            offset += count;
-        }
-        // Free global data memory on rank 0 to save RAM during merge
-        std::vector<Record>().swap(data); 
-    } else {
-        safe_mpi_recv(local_data, 0, 0, MPI_COMM_WORLD);
-    }
-    
-    // 2. Local Sort
+    // 1. Local Sort (Data is already distributed by parallel read)
 #ifdef USE_GNU_PARALLEL
-    __gnu_parallel::sort(local_data.begin(), local_data.end());
+    __gnu_parallel::sort(data.begin(), data.end());
 #else
-    std::sort(local_data.begin(), local_data.end());
+    std::sort(data.begin(), data.end());
 #endif
 
-    // 3. Tree Merge
+    // 2. Tree Merge
     for (int step = 1; step < world_size; step *= 2) {
         if (rank % (2 * step) != 0) {
             int dest = rank - step;
-            safe_mpi_send(local_data, dest, 1, MPI_COMM_WORLD);
+            safe_mpi_send(data, dest, 1, MPI_COMM_WORLD);
             break;
         } else if (rank + step < world_size) {
             int src = rank + step;
             std::vector<Record> received_data;
             safe_mpi_recv(received_data, src, 1, MPI_COMM_WORLD);
             
-            std::vector<Record> merged_data(local_data.size() + received_data.size());
+            std::vector<Record> merged_data(data.size() + received_data.size());
 #ifdef USE_GNU_PARALLEL
-            __gnu_parallel::merge(local_data.begin(), local_data.end(),
+            __gnu_parallel::merge(data.begin(), data.end(),
                                   received_data.begin(), received_data.end(),
                                   merged_data.begin());
 #else
-            std::merge(local_data.begin(), local_data.end(),
+            std::merge(data.begin(), data.end(),
                        received_data.begin(), received_data.end(),
                        merged_data.begin());
 #endif
-            local_data = std::move(merged_data);
+            data = std::move(merged_data);
         }
-    }
-    
-    if (rank == 0) {
-        data = std::move(local_data);
     }
 }
 
-// --- Optimized Radix Sort (MSD Distribution + Local LSD Sort) ---
+// --- Optimized Radix Sort (Distributed Partitioning) ---
 void radix_sort(std::vector<Record>& data, int rank, int world_size) {
-    // 1. Partitioning (MSD - First Byte)
-    // Determine which keys go to which processor.
-    
-    size_t n_global = 0;
-    if (rank == 0) n_global = data.size();
-    MPI_Bcast(&n_global, sizeof(size_t), MPI_BYTE, 0, MPI_COMM_WORLD);
+    // 1. Local Histogram (MSD - First Byte)
+    // Count how many keys belong to each destination rank
     
     int buckets_per_proc = 256 / world_size;
     int remainder = 256 % world_size;
     
-    // Helper to get owner of a bucket
+    // Helper to get owner of a bucket (byte value 0-255)
     auto get_owner = [&](int bucket) {
-        int r = 0;
         int current_b = 0;
         for(int i=0; i<world_size; ++i) {
             int count = buckets_per_proc + (i < remainder ? 1 : 0);
@@ -276,99 +246,139 @@ void radix_sort(std::vector<Record>& data, int rank, int world_size) {
         return world_size - 1;
     };
 
-    std::vector<Record> local_data;
+    int num_threads = omp_get_max_threads();
+    std::vector<long long> send_counts(world_size, 0);
     
-    if (rank == 0) {
-        // Parallel Bucketing by Destination Rank
-        int num_threads = omp_get_max_threads();
-        std::vector<size_t> rank_counts(world_size * num_threads, 0);
-        
-        // Count
-        #pragma omp parallel
-        {
-            int tid = omp_get_thread_num();
-            #pragma omp for schedule(static)
-            for (size_t i = 0; i < n_global; ++i) {
-                int b = data[i].key_byte(0);
-                int dest = get_owner(b);
-                rank_counts[tid * world_size + dest]++;
-            }
+    // Thread-local counts
+    std::vector<std::vector<long long>> thread_counts(num_threads, std::vector<long long>(world_size, 0));
+
+    #pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
+        #pragma omp for schedule(static)
+        for (size_t i = 0; i < data.size(); ++i) {
+            int b = data[i].key_byte(0);
+            int dest = get_owner(b);
+            thread_counts[tid][dest]++;
         }
-        
-        // Prefix Sum for offsets
-        std::vector<size_t> offsets(world_size * num_threads);
-        std::vector<size_t> global_rank_offsets(world_size); // Where each rank's data starts in the sorted buffer
-        size_t current_offset = 0;
-        
-        for (int r = 0; r < world_size; ++r) {
-            global_rank_offsets[r] = current_offset;
-            for (int t = 0; t < num_threads; ++t) {
-                offsets[t * world_size + r] = current_offset;
-                current_offset += rank_counts[t * world_size + r];
-            }
-        }
-        
-        // Shuffle
-        std::vector<Record> sorted_buffer(n_global);
-        #pragma omp parallel
-        {
-            int tid = omp_get_thread_num();
-            std::vector<size_t> local_offsets(world_size);
-            for(int r=0; r<world_size; ++r) {
-                local_offsets[r] = offsets[tid * world_size + r];
-            }
-            
-            #pragma omp for schedule(static)
-            for (size_t i = 0; i < n_global; ++i) {
-                int b = data[i].key_byte(0);
-                int dest = get_owner(b);
-                size_t dst_idx = local_offsets[dest]++;
-                sorted_buffer[dst_idx] = data[i];
-            }
-        }
-        
-        // Free original data
-        std::vector<Record>().swap(data);
-        
-        // Send
-        for (int i = 0; i < world_size; ++i) {
-            size_t count = 0;
-            // Calculate count for rank i
-            if (i < world_size - 1) count = global_rank_offsets[i+1] - global_rank_offsets[i];
-            else count = n_global - global_rank_offsets[i];
-            
-            if (i == rank) {
-                local_data.assign(sorted_buffer.begin() + global_rank_offsets[i], 
-                                  sorted_buffer.begin() + global_rank_offsets[i] + count);
-            } else {
-                // We need to send a vector, so we must copy. 
-                // (safe_mpi_send takes vector).
-                // Optimization: Overload safe_mpi_send to take pointer+size to avoid this copy?
-                // For now, just copy.
-                std::vector<Record> chunk(sorted_buffer.begin() + global_rank_offsets[i], 
-                                          sorted_buffer.begin() + global_rank_offsets[i] + count);
-                safe_mpi_send(chunk, i, 2, MPI_COMM_WORLD);
-            }
-        }
-    } else {
-        safe_mpi_recv(local_data, 0, 2, MPI_COMM_WORLD);
     }
     
-    // 3. Local Sort
-    local_radix_sort(local_data);
+    // Aggregate counts
+    for (int t = 0; t < num_threads; ++t) {
+        for (int r = 0; r < world_size; ++r) {
+            send_counts[r] += thread_counts[t][r];
+        }
+    }
+
+    // 2. Alltoall to exchange counts
+    std::vector<long long> recv_counts(world_size);
+    MPI_Alltoall(send_counts.data(), 1, MPI_LONG_LONG, 
+                 recv_counts.data(), 1, MPI_LONG_LONG, MPI_COMM_WORLD);
+
+    // 3. Calculate Offsets for Alltoallv
+    std::vector<int> send_displs(world_size, 0);
+    std::vector<int> recv_displs(world_size, 0);
+    std::vector<int> send_counts_int(world_size);
+    std::vector<int> recv_counts_int(world_size);
     
-    // 4. Gather
+    long long total_send = 0;
+    long long total_recv = 0;
+
+    for (int i = 0; i < world_size; ++i) {
+        send_displs[i] = total_send * sizeof(Record);
+        send_counts_int[i] = send_counts[i] * sizeof(Record);
+        total_send += send_counts[i];
+
+        recv_displs[i] = total_recv * sizeof(Record);
+        recv_counts_int[i] = recv_counts[i] * sizeof(Record);
+        total_recv += recv_counts[i];
+    }
+
+    // 4. Shuffle Data Locally to prepare for Send
+    std::vector<Record> send_buffer(data.size());
+    std::vector<size_t> offsets(world_size, 0);
+    
+    // Calculate local offsets for shuffling
+    size_t current = 0;
+    for(int i=0; i<world_size; ++i) {
+        offsets[i] = current;
+        current += send_counts[i];
+    }
+    
+    // Thread-safe shuffling using atomic offsets or pre-calculated thread offsets
+    // Using pre-calculated thread offsets for speed
+    std::vector<std::vector<size_t>> thread_offsets(num_threads, std::vector<size_t>(world_size));
+    std::vector<size_t> running_offsets = offsets;
+    
+    for(int t=0; t<num_threads; ++t) {
+        for(int r=0; r<world_size; ++r) {
+            thread_offsets[t][r] = running_offsets[r];
+            running_offsets[r] += thread_counts[t][r];
+        }
+    }
+
+    #pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
+        #pragma omp for schedule(static)
+        for (size_t i = 0; i < data.size(); ++i) {
+            int b = data[i].key_byte(0);
+            int dest = get_owner(b);
+            size_t idx = thread_offsets[tid][dest]++;
+            send_buffer[idx] = data[i];
+        }
+    }
+    
+    // Free original data
+    std::vector<Record>().swap(data);
+
+    // 5. Exchange Data
+    std::vector<Record> recv_buffer(total_recv);
+    
+    // Note: MPI_Alltoallv uses ints for counts/displs, so this is limited to 2GB per pair.
+    // For larger datasets, we'd need a loop or MPI_Alltoallw / custom implementation.
+    // Assuming < 2GB per pair for now as per typical use case, but worth noting.
+    
+    MPI_Alltoallv(send_buffer.data(), send_counts_int.data(), send_displs.data(), MPI_BYTE,
+                  recv_buffer.data(), recv_counts_int.data(), recv_displs.data(), MPI_BYTE,
+                  MPI_COMM_WORLD);
+
+    // 6. Local Sort
+    local_radix_sort(recv_buffer);
+    
+    // 7. Gather (Optional - only if we need everything on Rank 0)
+    // For benchmarking, we usually stop here or do a parallel write.
+    // To match previous behavior, we gather to Rank 0.
+    
+    // Gather counts
+    long long my_count = recv_buffer.size();
+    std::vector<long long> all_counts(world_size);
+    MPI_Gather(&my_count, 1, MPI_LONG_LONG, all_counts.data(), 1, MPI_LONG_LONG, 0, MPI_COMM_WORLD);
+    
     if (rank == 0) {
-        data.reserve(n_global);
-        data.insert(data.end(), local_data.begin(), local_data.end());
+        long long total_final = 0;
+        for(auto c : all_counts) total_final += c;
+        data.resize(total_final);
         
-        for (int i = 1; i < world_size; ++i) {
-            std::vector<Record> chunk;
-            safe_mpi_recv(chunk, i, 3, MPI_COMM_WORLD);
-            data.insert(data.end(), chunk.begin(), chunk.end());
+        // Copy rank 0's data
+        std::copy(recv_buffer.begin(), recv_buffer.end(), data.begin());
+        
+        // Receive from others
+        size_t current_offset = recv_buffer.size();
+        for(int i=1; i<world_size; ++i) {
+            if (all_counts[i] > 0) {
+                // Receive directly into the final vector
+                // Need to use safe_recv logic because these chunks can be huge
+                std::vector<Record> chunk;
+                safe_mpi_recv(chunk, i, 99, MPI_COMM_WORLD);
+                std::copy(chunk.begin(), chunk.end(), data.begin() + current_offset);
+                current_offset += chunk.size();
+            }
         }
     } else {
-        safe_mpi_send(local_data, 0, 3, MPI_COMM_WORLD);
+        if (my_count > 0) {
+            safe_mpi_send(recv_buffer, 0, 99, MPI_COMM_WORLD);
+        }
     }
 }
 
@@ -394,10 +404,13 @@ int main(int argc, char* argv[]) {
     
     omp_set_num_threads(threads);
 
-    // Read data (Rank 0 only)
-    auto data = read_data(filename, rank);
-    size_t N = 0;
-    if (rank == 0) N = data.size();
+    // Parallel Read
+    auto data = read_data_parallel(filename, rank, world_size);
+    
+    // Determine total N for reporting
+    long long local_N = data.size();
+    long long global_N = 0;
+    MPI_Reduce(&local_N, &global_N, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
 
     MPI_Barrier(MPI_COMM_WORLD);
     auto start = std::chrono::high_resolution_clock::now();
@@ -419,12 +432,12 @@ int main(int argc, char* argv[]) {
         bool sorted_correctly = is_sorted(data);
         
         double duration_s = duration_ms.count() / 1000.0;
-        double mkeys_per_second = (duration_s > 0) ? (N / 1e6 / duration_s) : 0;
+        double mkeys_per_second = (duration_s > 0) ? (global_N / 1e6 / duration_s) : 0;
 
         json result = {
             {"Title", "Optimized Parallel Sorter"},
             {"algorithm", algorithm},
-            {"N", N},
+            {"N", global_N},
             {"mpi_procs", world_size},
             {"omp_threads", threads},
             {"threads", world_size * threads},
