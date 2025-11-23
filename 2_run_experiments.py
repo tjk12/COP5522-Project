@@ -98,7 +98,10 @@ EXPERIMENTS = {
     "sequential": {
         "enabled": True,
         "executables": {
-            "basic_seq_sorter": ["merge_sort", "radix_sort"],
+            "basic_seq_sorter": [
+                "merge_sort",
+                "radix_sort"
+            ],
             "optimized_seq_sorter": [
                 "merge_sort",
                 "radix_sort"
