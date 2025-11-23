@@ -114,7 +114,7 @@ EXPERIMENTS = {
                 "radix_sort"
             ],
         },
-        "threads": [1, 2, 4, 8, 16, 32, 64, 128] # Bridges has 128 cores per node, Adjust as needed
+        "threads": [1, 4, 16, 64] # Bridges has 128 cores per node, Adjust as needed
     },
     "mpi": {
         "enabled": not args.no_mpi,
@@ -125,7 +125,7 @@ EXPERIMENTS = {
             ],
         },
         "processes": [1, 2, 3, 4, 5], # Use 5 nodes max
-        "threads_per_process": [1, 2, 4, 8, 16, 32, 64, 128] # Bridges has 128 cores per node, Adjust as needed
+        "threads_per_process": [64] # Bridges has 128 cores per node, Adjust as needed
     }
 }
 
@@ -225,12 +225,42 @@ def build_missing_executables():
                 print(f"✗ Error building {exe_name}: {e}")
 
 
-def run_and_collect(cmd, results_list, env=None):
+def load_existing_results():
+    if RESULTS_FILE.exists():
+        try:
+            with open(RESULTS_FILE, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            print(f"Warning: Could not decode {RESULTS_FILE}. Starting fresh.")
+            return []
+    return []
+
+
+def is_done(results, query):
+    if not query:
+        return False
+    for res in results:
+        match = True
+        for k, v in query.items():
+            # Compare as strings to handle potential type mismatches
+            if str(res.get(k)) != str(v):
+                match = False
+                break
+        if match:
+            return True
+    return False
+
+
+def run_and_collect(cmd, results_list, env=None, check_params=None):
     """
     Executes a command, parses JSON output, appends to results_list.
     env may be provided (a dict) to modify env vars such as
     OMP_NUM_THREADS.
     """
+    if check_params and is_done(results_list, check_params):
+        print(f"  Skipping (already done): {check_params}")
+        return
+
     print(f"  Running: {' '.join(cmd)}")
     try:
         output = subprocess.check_output(
@@ -265,6 +295,10 @@ def run_and_collect(cmd, results_list, env=None):
                   f"Time: {result_json.get('time_ms'):.2f}ms, "
                   f"Correct: {result_json.get('correct')}")
 
+        # Save incrementally
+        with open(RESULTS_FILE, "w") as f:
+            json.dump(results_list, f, indent=2)
+
     except subprocess.CalledProcessError as e:
         print(f"ERROR running command: {' '.join(cmd)}")
         try:
@@ -283,7 +317,9 @@ def main():
     # Build missing executables
     build_missing_executables()
     
-    all_results = []
+    all_results = load_existing_results()
+    if all_results:
+        print(f"Loaded {len(all_results)} existing results from {RESULTS_FILE}")
 
     print("\n=== Starting Experiments ===")
 
@@ -306,7 +342,8 @@ def main():
                 data_file = DATA_DIR / f"data_{size}.bin"
                 for algo in algos:
                     cmd = [exe_path, algo, str(data_file)]
-                    run_and_collect(cmd, all_results)
+                    run_and_collect(cmd, all_results,
+                                    check_params={'algorithm': algo, 'N': size})
 
     # OpenMP
     if EXPERIMENTS['openmp']['enabled']:
@@ -326,8 +363,10 @@ def main():
                         env = os.environ.copy()
                         env['OMP_NUM_THREADS'] = str(threads)
                         cmd = [exe_path, algo, str(data_file)]
+                        cmd = [exe_path, algo, str(data_file)]
                         run_and_collect(cmd, all_results,
-                                        env=env)
+                                        env=env,
+                                        check_params={'algorithm': algo, 'N': size, 'threads': threads})
 
     # MPI / Hybrid (optional)
     if EXPERIMENTS['mpi']['enabled']:
@@ -362,14 +401,24 @@ def main():
                                            exe_path, algo,
                                            str(threads),
                                            str(data_file)]
+                                    cmd = [mpirun_cmd, '-np',
+                                           str(procs),
+                                           exe_path, algo,
+                                           str(threads),
+                                           str(data_file)]
                                     run_and_collect(cmd,
-                                                    all_results)
+                                                    all_results,
+                                                    check_params={'algorithm': algo, 'N': size, 'mpi_procs': procs, 'omp_threads': threads})
                             else:
                                 cmd = [mpirun_cmd, '-np',
                                        str(procs), exe_path,
                                        algo, str(data_file)]
+                                cmd = [mpirun_cmd, '-np',
+                                       str(procs), exe_path,
+                                       algo, str(data_file)]
                                 run_and_collect(cmd,
-                                                all_results)
+                                                all_results,
+                                                check_params={'algorithm': algo, 'N': size, 'mpi_procs': procs})
 
     save_results(all_results)
 

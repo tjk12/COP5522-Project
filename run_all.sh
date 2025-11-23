@@ -2,7 +2,7 @@
 
 # --- SLURM Configuration ---
 #SBATCH -N 5                     # Max nodes to use (for the 5-node test)
-#SBATCH -t 04:00:00              # Max walltime (4 hours, adjust as needed)
+#SBATCH -t 08:00:00              # Max walltime (8 hours, adjust as needed)
 #SBATCH -p RM                    # Partition (RM is common, check Bridges docs)
 
 # Exit immediately if a command exits with a non-zero status.
