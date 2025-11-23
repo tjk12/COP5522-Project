@@ -38,13 +38,13 @@ PROJECT_ROOT = Path.cwd()
 
 # Experiment Definitions
 DEFAULT_SIZES = [
-    6_250_000,
-    12_500_000,
-    25_000_000,
-    50_000_000,
-    100_000_000,
-    200_000_000,
-    400_000_000
+    2_500_000,
+    5_000_000,
+    10_000_000,
+    20_000_000,
+    40_000_000,
+    80_000_000,
+    160_000_000
 ]
 
 # Max size for sequential experiments to avoid excessive runtime

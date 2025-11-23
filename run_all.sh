@@ -34,11 +34,11 @@ echo "    ✓ Experiments finished successfully"
 echo "    Results saved to: results.json"
 
 # Step 3: Build report and generate plots
-echo ""
-echo "==> Step 3 of 3: Building report and generating plots..."
-python3 3_build_report.py
-
-echo "    ✓ Report plots created"
+#echo ""
+#echo "==> Step 3 of 3: Building report and generating plots..."
+#python3 3_build_report.py
+#
+#echo "    ✓ Report plots created"
 
 echo ""
 echo "=========================================="
