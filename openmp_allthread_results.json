@@ -1,0 +1,164 @@
+[
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "merge_sort",
+    "correct": true,
+    "mkeys_per_s": 3.5124981251312413,
+    "threads": 1,
+    "time_ms": 14234.883043
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "merge_sort",
+    "correct": true,
+    "mkeys_per_s": 6.06710164155692,
+    "threads": 2,
+    "time_ms": 8241.167357
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "merge_sort",
+    "correct": true,
+    "mkeys_per_s": 8.85665637988524,
+    "threads": 4,
+    "time_ms": 5645.471367
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "merge_sort",
+    "correct": true,
+    "mkeys_per_s": 10.427672073048765,
+    "threads": 8,
+    "time_ms": 4794.934061
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "merge_sort",
+    "correct": true,
+    "mkeys_per_s": 13.227740818142749,
+    "threads": 16,
+    "time_ms": 3779.934963
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "merge_sort",
+    "correct": true,
+    "mkeys_per_s": 13.808443451900157,
+    "threads": 32,
+    "time_ms": 3620.972934
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "merge_sort",
+    "correct": true,
+    "mkeys_per_s": 13.403102015699723,
+    "threads": 64,
+    "time_ms": 3730.479701
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "merge_sort",
+    "correct": true,
+    "mkeys_per_s": 11.474969493328864,
+    "threads": 96,
+    "time_ms": 4357.310059
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "merge_sort",
+    "correct": true,
+    "mkeys_per_s": 12.569416750231062,
+    "threads": 128,
+    "time_ms": 3977.909317
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "radix_sort",
+    "correct": true,
+    "mkeys_per_s": 3.0675324935005244,
+    "threads": 1,
+    "time_ms": 16299.74584
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "radix_sort",
+    "correct": true,
+    "mkeys_per_s": 4.762810320020518,
+    "threads": 2,
+    "time_ms": 10498.003624
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "radix_sort",
+    "correct": true,
+    "mkeys_per_s": 5.466080197410136,
+    "threads": 4,
+    "time_ms": 9147.322797
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "radix_sort",
+    "correct": true,
+    "mkeys_per_s": 6.543294878871353,
+    "threads": 8,
+    "time_ms": 7641.410165
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "radix_sort",
+    "correct": true,
+    "mkeys_per_s": 8.032895398126966,
+    "threads": 16,
+    "time_ms": 6224.405712
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "radix_sort",
+    "correct": true,
+    "mkeys_per_s": 8.42717070641654,
+    "threads": 32,
+    "time_ms": 5933.189411
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "radix_sort",
+    "correct": true,
+    "mkeys_per_s": 8.491568047091299,
+    "threads": 64,
+    "time_ms": 5888.193997
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "radix_sort",
+    "correct": true,
+    "mkeys_per_s": 8.516320721912484,
+    "threads": 96,
+    "time_ms": 5871.079969
+  },
+  {
+    "N": 50000000,
+    "Title": "Basic Parallel Sorter",
+    "algorithm": "radix_sort",
+    "correct": true,
+    "mkeys_per_s": 8.414243055176893,
+    "threads": 128,
+    "time_ms": 5942.305169
+  }
+]
