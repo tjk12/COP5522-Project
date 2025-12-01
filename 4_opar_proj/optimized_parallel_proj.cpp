@@ -9,6 +9,7 @@
 #include <cstring>
 #include <mpi.h>
 #include <omp.h>
+#include <climits>
 #include "json.hpp"
 
 // Check for GNU Parallel Mode
@@ -283,14 +284,27 @@ void radix_sort(std::vector<Record>& data, int rank, int world_size) {
     
     long long total_send = 0;
     long long total_recv = 0;
+    bool use_alltoallv = true;  // Flag to check if we can safely use MPI_Alltoallv
 
     for (int i = 0; i < world_size; ++i) {
-        send_displs[i] = total_send * sizeof(Record);
-        send_counts_int[i] = send_counts[i] * sizeof(Record);
+        long long send_bytes = send_counts[i] * sizeof(Record);
+        long long recv_bytes = recv_counts[i] * sizeof(Record);
+        long long send_disp_bytes = total_send * sizeof(Record);
+        long long recv_disp_bytes = total_recv * sizeof(Record);
+        
+        // Check for int overflow (MPI_Alltoallv uses int for counts/displs)
+        // INT_MAX is approximately 2.1GB
+        if (send_bytes > INT_MAX || recv_bytes > INT_MAX ||
+            send_disp_bytes > INT_MAX || recv_disp_bytes > INT_MAX) {
+            use_alltoallv = false;
+        }
+        
+        send_displs[i] = (int)send_disp_bytes;
+        send_counts_int[i] = (int)send_bytes;
         total_send += send_counts[i];
 
-        recv_displs[i] = total_recv * sizeof(Record);
-        recv_counts_int[i] = recv_counts[i] * sizeof(Record);
+        recv_displs[i] = (int)recv_disp_bytes;
+        recv_counts_int[i] = (int)recv_bytes;
         total_recv += recv_counts[i];
     }
 
@@ -335,13 +349,55 @@ void radix_sort(std::vector<Record>& data, int rank, int world_size) {
     // 5. Exchange Data
     std::vector<Record> recv_buffer(total_recv);
     
-    // Note: MPI_Alltoallv uses ints for counts/displs, so this is limited to 2GB per pair.
-    // For larger datasets, we'd need a loop or MPI_Alltoallw / custom implementation.
-    // Assuming < 2GB per pair for now as per typical use case, but worth noting.
-    
-    MPI_Alltoallv(send_buffer.data(), send_counts_int.data(), send_displs.data(), MPI_BYTE,
-                  recv_buffer.data(), recv_counts_int.data(), recv_displs.data(), MPI_BYTE,
-                  MPI_COMM_WORLD);
+    if (use_alltoallv) {
+        // Fast path: Use MPI_Alltoallv for smaller datasets
+        MPI_Alltoallv(send_buffer.data(), send_counts_int.data(), send_displs.data(), MPI_BYTE,
+                      recv_buffer.data(), recv_counts_int.data(), recv_displs.data(), MPI_BYTE,
+                      MPI_COMM_WORLD);
+    } else {
+        // Fallback: Manual point-to-point communication for large datasets
+        // This avoids INT_MAX overflow in MPI_Alltoallv
+        
+        // Prepare send partitions
+        std::vector<std::vector<Record>> send_partitions(world_size);
+        for (int dest = 0; dest < world_size; ++dest) {
+            if (send_counts[dest] > 0) {
+                size_t offset = (dest == 0) ? 0 : (send_displs[dest] / sizeof(Record));
+                send_partitions[dest].assign(
+                    send_buffer.begin() + offset,
+                    send_buffer.begin() + offset + send_counts[dest]
+                );
+            }
+        }
+        
+        // Free send_buffer to save memory
+        std::vector<Record>().swap(send_buffer);
+        
+        // Send data to all ranks (including self-copy)
+        for (int dest = 0; dest < world_size; ++dest) {
+            if (send_counts[dest] > 0) {
+                if (dest == rank) {
+                    // Self-copy
+                    std::copy(send_partitions[dest].begin(), send_partitions[dest].end(),
+                             recv_buffer.begin() + (recv_displs[rank] / sizeof(Record)));
+                } else {
+                    // Use safe_mpi_send for large messages
+                    safe_mpi_send(send_partitions[dest], dest, 100 + rank, MPI_COMM_WORLD);
+                }
+            }
+        }
+        
+        // Receive data from all ranks
+        size_t recv_offset = 0;
+        for (int src = 0; src < world_size; ++src) {
+            if (recv_counts[src] > 0 && src != rank) {
+                std::vector<Record> temp;
+                safe_mpi_recv(temp, src, 100 + src, MPI_COMM_WORLD);
+                std::copy(temp.begin(), temp.end(), recv_buffer.begin() + recv_offset);
+            }
+            recv_offset += recv_counts[src];
+        }
+    }
 
     // 6. Local Sort
     local_radix_sort(recv_buffer);
