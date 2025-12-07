@@ -135,7 +135,7 @@ Each C++ program expects an algorithm name and a filename. For example, run the 
 OMP_NUM_THREADS=4 ./3_bpar_proj/basic_omp_sorter merge_sort sorting_project_data/data_100000.bin
 
 # Run the MPI-enabled optimized sorter (if you built MPI version)
-mpirun -n 4 ./4_opar_proj/optimized_mpi_sorter radix_sort sorting_project_data/data_100000.bin
+mpirun -n 4 ./4_opar_proj/optimized_mpi_sorter 64 radix_sort sorting_project_data/data_100000.bin
 ```
 
 Each program prints a JSON result to stdout with fields like `N`, `time_ms`, `mkeys_per_s`, and `correct` so you can capture/pipe it to a file if needed:
